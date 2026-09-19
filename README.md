@@ -32,7 +32,7 @@ Die App hilft dabei, lange Videos nicht vollständig manuell durchsuchen zu müs
 
 `Start.cmd` lädt das stabile GHCR-Image automatisch und startet den Container. Für echte Analysen muss anschließend unter `Einstellungen` ein eigener Gemini API Key hinterlegt werden.
 
-## Alternative: öffentlicher Repository-Clone
+## Alternative: öffentlicher Repository-Clone (Empfehlung für die Installation)
 
 Ablauf für Entwickler und technische Nutzer verfügbar:
 
