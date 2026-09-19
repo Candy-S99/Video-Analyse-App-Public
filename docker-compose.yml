@@ -1,12 +1,10 @@
 services:
   video-analysis-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/candy-s99/video-analyse-app-public:${APP_IMAGE_TAG:-stable}
     restart: on-failure:5
-    env_file:
-      - .env
     environment:
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GEMINI_MODEL: "${GEMINI_MODEL:-}"
       NODE_ENV: production
       DATA_DIR: /data/jobs
       TEMP_DIR: /tmp

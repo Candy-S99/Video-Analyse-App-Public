@@ -4,7 +4,7 @@
 
 Der Gemini API-Key kann auf zwei Wegen konfiguriert werden:
 
-1. Vor dem ersten Start über `GEMINI_API_KEY` in `.env`.
+1. Optional vor dem ersten Start über `GEMINI_API_KEY` in `.env`.
 2. Nach dem Start in der Weboberfläche unter `Einstellungen` über das Passwortfeld `Gemini API Key`.
 
 Die zweite Variante ist der Standardweg für eine laufende Installation. Die normale Konfigurationsabfrage liefert nur `gemini_api_key_configured`; der tatsächliche Wert bleibt serverseitig.

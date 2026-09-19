@@ -6,56 +6,31 @@ Lokale Videoanalyse-App für öffentliche YouTube-Videos. Diese öffentliche Var
 
 - Docker Desktop oder Docker Engine mit Docker Compose.
 - Git für den öffentlichen Clone.
-- Internetzugriff für den ersten Image-Build, Gemini und öffentliche YouTube-Quellen.
+- Internetzugriff für den ersten Image-Pull, Gemini und öffentliche YouTube-Quellen.
 - Node.js, npm, Python und ffmpeg müssen auf dem Host nicht installiert werden. Diese Laufzeitbestandteile befinden sich im Container.
 
-## Schnellstart
+## Schnellstart mit öffentlichem Docker-Image
 
 ```powershell
-$ErrorActionPreference = 'Stop'
-$repoPath = Join-Path (Get-Location) 'Video-Analyse-App-Public'
-
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    throw 'Git fehlt. Installiere Git für Windows zuerst.'
-}
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-    throw 'Docker fehlt. Installiere und starte Docker Desktop zuerst.'
-}
-if (Test-Path $repoPath) {
-    throw "Der Zielordner existiert bereits: $repoPath"
-}
-
-git -c "credential.helper=" clone "https://github.com/Candy-S99/Video-Analyse-App-Public.git" $repoPath
-if ($LASTEXITCODE -ne 0) {
-    throw 'Der öffentliche Clone ist fehlgeschlagen.'
-}
-Set-Location $repoPath
-Copy-Item .env.example .env
-docker compose up --build -d
-
-$healthy = $false
-for ($attempt = 1; $attempt -le 30; $attempt++) {
-    try {
-        $health = Invoke-RestMethod -Uri 'http://localhost:3006/health' -TimeoutSec 5
-        if ($health.status -eq 'ok') {
-            $healthy = $true
-            break
-        }
-    } catch {
-        Start-Sleep -Seconds 2
-    }
-}
-
-if (-not $healthy) {
-    docker compose logs --tail=100 video-analysis-app
-    throw 'Der Container wurde nicht rechtzeitig gesund.'
-}
-
+git clone "https://github.com/Candy-S99/Video-Analyse-App-Public.git"
+Set-Location Video-Analyse-App-Public
+docker compose up -d
 docker compose ps
-Write-Host 'Die Video-Analyse-App läuft unter http://localhost:3006.'
 ```
 
-Das Repository ist öffentlich; für den Clone ist kein GitHub-Konto erforderlich. Für echte Analysen muss der Betreiber anschließend den eigenen Gemini-Key in `.env` oder über `Einstellungen` hinterlegen.
+Das Repository ist öffentlich; für den Clone ist kein GitHub-Konto erforderlich. `docker compose up -d` lädt das versionierte Standard-Image `stable` automatisch aus der GitHub Container Registry. Für den ersten Start ist kein Gemini-Key und keine `.env`-Datei erforderlich.
+
+Für echte Analysen muss der Betreiber anschließend den eigenen Gemini-Key über `Einstellungen` hinterlegen.
+
+## Source-Build für Entwicklung
+
+Der normale Schnellstart verwendet ein fertiges Image. Für lokale Änderungen am Quellcode steht der Build-Override zur Verfügung:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+```
+
+Dieser Weg baut das Image lokal aus dem [Dockerfile](Dockerfile). Die Tests verwenden denselben Override. Für normale Installationen ist `--build` nicht erforderlich.
 
 In `.env` kann vor dem Start ein eigener Gemini-Key eingetragen werden:
 
@@ -119,10 +94,28 @@ docker compose logs --tail=100 video-analysis-app
 ```powershell
 docker compose restart
 docker compose down
-docker compose up --build -d
+docker compose pull
+docker compose up -d
 ```
 
 `docker compose down` entfernt den Container, aber nicht die Dateien unter `data/jobs`. Der Restart-Modus `on-failure:5` startet den Container nach einem fehlerhaften Prozessende bis zu fünfmal neu. Ein kontrolliertes Herunterfahren über die App endet erfolgreich und bleibt beendet.
+
+### Feste Version oder Rollback
+
+Standardmäßig wird `stable` verwendet. Für einen reproduzierbaren Stand kann vor dem Start ein Versionstag gesetzt werden:
+
+```powershell
+$env:APP_IMAGE_TAG = 'v0.1.0'
+docker compose pull
+docker compose up -d
+```
+
+Für die Rückkehr zum aktuellen stabilen Stand:
+
+```powershell
+Remove-Item Env:APP_IMAGE_TAG -ErrorAction SilentlyContinue
+docker compose up -d
+```
 
 ## Persistente Daten
 
@@ -143,15 +136,17 @@ Die wichtigsten optionalen Variablen in `.env` sind:
 | `SEGMENT_LENGTH` | `30` | Segmentlänge der Analyse in Sekunden |
 | `EXTRACT_TRANSCRIPT` | `true` | Transkriptextraktion aktivieren oder deaktivieren |
 | `APP_PORT` | `3006` | Host-Port der lokalen Weboberfläche |
+| `APP_IMAGE_TAG` | `stable` | Festes Image-Tag für Versionierung oder Rollback |
 
 ## Fehlerbehebung
 
-- **`.env` fehlt:** `Copy-Item .env.example .env` ausführen. Compose benötigt die Datei auch dann, wenn der Gemini-Key später über die UI gesetzt wird.
+- **`.env` fehlt:** Das ist beim Standardstart unproblematisch. Eine `.env` wird nur benötigt, wenn Port, Image-Tag oder optionale Startwerte angepasst werden sollen.
 - **Port belegt:** In `.env` `APP_PORT` auf einen freien Host-Port setzen und die Anwendung über diesen Port öffnen.
 - **Container startet nicht:** `docker compose logs --tail=100 video-analysis-app` prüfen.
 - **Analyse verweigert:** Gemini-Key über `.env` beim ersten Start oder über `Einstellungen` hinterlegen.
 - **YouTube-Fehler:** Nur öffentliche, ohne Login erreichbare Videos verwenden.
-- **Build-Fehler:** Docker-Daemon und Internetzugriff prüfen; anschließend `docker compose build --no-cache` ausführen.
+- **Image- oder Pull-Fehler:** Docker-Daemon und Internetzugriff prüfen; anschließend `docker compose pull` ausführen.
+- **Source-Build-Fehler:** Für lokale Entwicklung `docker compose -f docker-compose.yml -f docker-compose.build.yml build --no-cache` verwenden.
 
 ## Sicherheit
 
@@ -159,7 +154,9 @@ Die Compose-Datei bindet die Weboberfläche standardmäßig nur an `127.0.0.1`. 
 
 ## Automatische Prüfungen
 
-GitHub Actions prüft bei Pull Requests und Pushes nach `main` die Dependency-Installation mit `npm ci`, die Tests, den Produktions-Build, die Compose-Konfiguration sowie einen Docker-Start mit `/health`. Der Workflow benötigt keinen Gemini-Key und führt keine echte Videoanalyse aus.
+GitHub Actions prüft bei Pull Requests und Pushes nach `main` die Dependency-Installation mit `npm ci`, die Tests, den Produktions-Build, die Compose-Konfiguration sowie einen Source-Docker-Start mit `/health`. Der Workflow benötigt keinen Gemini-Key und führt keine echte Videoanalyse aus.
+
+Bei einem Versionstag wie `v0.1.0` baut ein separater Workflow das öffentliche Image für `linux/amd64` und `linux/arm64` und veröffentlicht es mit dem Versionstag sowie `stable` und `latest` in GHCR. Der normale Compose-Start lädt `stable`; für Rollbacks kann `APP_IMAGE_TAG` gesetzt werden.
 
 Dependabot überwacht npm-, Python-, Docker- und GitHub-Action-Abhängigkeiten. Automatische Update-PRs sind auf Sicherheitsupdates begrenzt.
 
