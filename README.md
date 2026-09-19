@@ -2,6 +2,26 @@
 
 Lokale Videoanalyse-App für öffentliche YouTube-Videos. Die öffentliche Variante läuft als einzelner Docker-Container und verwendet ein fertiges Image aus der GitHub Container Registry.
 
+
+> **Kurz erklärt:** Diese Webapp nimmt einen öffentlichen YouTube-Link entgegen und macht daraus eine strukturierte Videoanalyse mit Transkript, relevanten Zeitstempeln, Videometadaten und echten Original-Screenshots. So lassen sich lange Videos schneller verstehen, wichtige Stellen gezielt wiederfinden und die Ergebnisse für Recherche, Dokumentation oder Automatisierungen weiterverwenden.
+
+Lokale Videoanalyse-App für öffentliche YouTube-Videos. Die Anwendung läuft als einzelner Docker-Container und speichert Jobs, Ergebnisse, Konfiguration und den lokalen Gemini-SecretStore im gemounteten Datenordner.
+
+## Was macht die Anwendung?
+
+Die Anwendung verwandelt ein öffentlich erreichbares YouTube-Video in eine nachvollziehbare Sammlung aus Analyseergebnissen und Originalmaterial. Ein typischer Ablauf sieht so aus:
+
+1. **Video starten:** In der Weboberfläche wird ein öffentlicher YouTube-Link als neuer Analyse-Job eingegeben.
+2. **Inhalt analysieren:** Das Video wird in Abschnitte aufgeteilt und mit Gemini ausgewertet. Dabei werden unter anderem Inhalt, Szenen und relevante Stellen erfasst.
+3. **Transkript und Zeitstempel erzeugen:** Gesprochener Inhalt wird – sofern vorhanden – als Transkript gespeichert. Wichtige Szenen werden mit Zeitstempeln und Beschreibungen versehen.
+4. **Bilder aus dem Originalvideo sichern:** Zu den erkannten Stellen extrahiert die App echte Einzelbilder aus dem Video. Die Screenshots werden nicht künstlich erzeugt, sondern stammen direkt aus der YouTube-Quelle.
+5. **Ergebnisse bereitstellen:** In der Weboberfläche und im Ausgabeordner stehen anschließend unter anderem Transkriptdateien, JSON-/Manifestdaten, Videometadaten, Zeitstempel und PNG-Screenshots zur Verfügung. Die Ergebnisse können außerdem über die REST-API oder n8n weiterverarbeitet werden.
+
+### Wofür ist das nützlich?
+
+Die App hilft dabei, lange Videos nicht vollständig manuell durchsuchen zu müssen. Sie eignet sich beispielsweise für die Recherche in Vorträgen und Interviews, die Dokumentation von Videoinhalten, das Wiederfinden bestimmter Szenen sowie die automatisierte Weiterverarbeitung von Transkripten, Zeitstempeln und Bildern.
+
+
 ## Schnellstart per Release-ZIP
 
 Für normale Installationen ist kein Git und keine Shell-Navigation erforderlich:
