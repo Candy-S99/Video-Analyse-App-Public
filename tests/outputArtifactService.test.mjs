@@ -64,3 +64,19 @@ test('löst nur vorhandene reguläre Dateien im Jobordner auf', () => {
   assert.throws(() => service.resolve(createJob(), '../outside.txt'), OutputArtifactPathError);
   assert.throws(() => service.resolve(createJob(), 'missing.txt'), /nicht gefunden/i);
 });
+
+test('lehnt Symlink-Komponenten auch bei einem Ziel innerhalb des Jobordners ab', () => {
+  const dataDir = createTempDataDir();
+  const jobDirectory = createOutputFixture(dataDir);
+  const service = new OutputArtifactService({ dataDir });
+  fs.symlinkSync(
+    path.join(jobDirectory, '02-transcript'),
+    path.join(jobDirectory, 'transcript-link'),
+    'junction',
+  );
+
+  assert.throws(
+    () => service.resolve(createJob(), 'transcript-link/transcript.txt'),
+    OutputArtifactPathError,
+  );
+});

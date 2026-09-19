@@ -84,15 +84,7 @@ export class OutputArtifactService {
       throw new OutputArtifactPathError(error instanceof Error ? error.message : undefined);
     }
 
-    let stat: fs.Stats;
-    try {
-      stat = fs.lstatSync(absolutePath);
-    } catch {
-      throw new OutputArtifactNotFoundError();
-    }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
-      throw new OutputArtifactNotFoundError();
-    }
+    this.assertRegularPath(paths.jobDirectory, absolutePath);
 
     const canonicalRoot = fs.realpathSync(paths.jobDirectory);
     const canonicalPath = fs.realpathSync(absolutePath);
@@ -141,6 +133,28 @@ export class OutputArtifactService {
       mime_type: metadata.mimeType,
       preview_kind: metadata.previewKind,
     };
+  }
+
+  private assertRegularPath(root: string, candidate: string): void {
+    const relative = path.relative(root, candidate);
+    let current = root;
+    const components = relative.split(path.sep);
+    for (const [index, component] of components.entries()) {
+      current = path.join(current, component);
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(current);
+      } catch {
+        throw new OutputArtifactNotFoundError();
+      }
+      if (stat.isSymbolicLink()) {
+        throw new OutputArtifactPathError('Output-Dateipfad enthält einen symbolischen Link');
+      }
+      const finalComponent = index === components.length - 1;
+      if ((!finalComponent && !stat.isDirectory()) || (finalComponent && !stat.isFile())) {
+        throw new OutputArtifactNotFoundError();
+      }
+    }
   }
 
   private isContained(root: string, candidate: string): boolean {
