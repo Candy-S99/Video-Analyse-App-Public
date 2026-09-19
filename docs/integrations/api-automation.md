@@ -8,7 +8,7 @@ Dieses Dokument beschreibt die lokalen REST-Schnittstellen der Video-Analyse-App
 Weboberfläche ─┐
                ├─ REST API ─ JobManager ─ Gemini / YouTube / ffmpeg
 n8n / Skripte ─┘                  │
-                                 └─ data/jobs und optionale externe Ausgaben
+               └─ kanonischer Output unter output/ und internes Docker-Volume
 ```
 
 Die Anwendung stellt im Docker-Setup zwei erreichbare Ports bereit:
@@ -35,7 +35,7 @@ Der Docker-Healthcheck verwendet `/health`. Beide Endpunkte benötigen keine API
 GET /api/v1/video-analysis/config
 ```
 
-Die Antwort enthält unter anderem `model`, `segment_length_seconds`, `extract_transcript`, `external_output_dir`, die Screenshot-Parameter und `automatic_cleanup_enabled`. Der Gemini-Key wird niemals zurückgegeben; sichtbar ist nur `gemini_api_key_configured`.
+Die Antwort enthält unter anderem `model`, `segment_length_seconds`, `extract_transcript`, die Screenshot-Parameter und `automatic_cleanup_enabled`. Der Gemini-Key wird niemals zurückgegeben; sichtbar ist nur `gemini_api_key_configured`.
 
 ### Laufzeitkonfiguration ändern
 
@@ -47,7 +47,6 @@ Content-Type: application/json
   "model": "gemini-3.8-flash",
   "segment_length_seconds": 30,
   "extract_transcript": true,
-  "external_output_dir": "/mnt/external-output/results",
   "fine_search_window_seconds": 2,
   "fine_search_interval_seconds": 0.5,
   "max_screenshots_per_candidate": 4,
@@ -56,7 +55,7 @@ Content-Type: application/json
 }
 ```
 
-Es dürfen nur bekannte Felder übertragen werden. `external_output_dir` muss ein absoluter Containerpfad unter `/mnt/external-output` sein; Hostpfade wie `C:\\...` oder `/home/...` gehören nicht in den API-Vertrag. Die Konfiguration gilt für neu gestartete Jobs. Jeder Job speichert zusätzlich einen Konfigurationssnapshot.
+Es dürfen nur bekannte Felder übertragen werden. Hostpfade gehören nicht in den API-Vertrag. Die Konfiguration gilt für neu gestartete Jobs und wird persistent im internen Docker-Volume gespeichert. Jeder Job speichert zusätzlich einen Konfigurationssnapshot.
 
 ### Gemini-Key automatisiert verwalten
 
@@ -71,7 +70,7 @@ Content-Type: application/json
 DELETE /api/v1/video-analysis/config/gemini-api-key
 ```
 
-Der Schlüssel wird im persistenten SecretStore unter `data/jobs/.video-analysis-secrets.json` gespeichert. In n8n sollte der Key über Credentials oder einen Secret Manager eingespeist werden, nicht als fest eingetragener Klartext in einem Workflow.
+Der Schlüssel wird im persistenten SecretStore unter `/data/jobs/.video-analysis-secrets.json` gespeichert. In n8n sollte der Key über Credentials oder einen Secret Manager eingespeist werden, nicht als fest eingetragener Klartext in einem Workflow.
 
 ## Jobs und Ergebnisse
 
@@ -123,7 +122,7 @@ Ein einfaches Polling fragt den Status alle paar Sekunden ab und beendet die Sch
 | `GET` | `/api/v1/video-analysis/jobs/{job_id}/screenshots` | Sortierte Screenshot-Metadaten als JSON |
 | `GET` | `/api/v1/video-analysis/jobs/{job_id}/screenshots/{screenshot_id}` | PNG-Binärantwort |
 
-Ein physisch durch Retention entfernter Screenshot antwortet mit HTTP `410` und `SCREENSHOT_PURGED`. Das kanonische Jobresultat liegt zusätzlich als `manifest.json` im jeweiligen Jobordner unter `data/jobs`.
+Ein physisch durch Retention entfernter Screenshot antwortet mit HTTP `410` und `SCREENSHOT_PURGED`. Das kanonische Jobresultat liegt zusätzlich als `manifest.json` im jeweiligen Jobordner unter `output/`.
 
 ## Kontrolliertes Herunterfahren
 
@@ -147,7 +146,7 @@ Content-Type: application/json
 { "confirm": true }
 ```
 
-Manifeste, Logs und das Ausgabehandbuch bleiben geschützt. Kopien unter `external-output` werden nicht automatisch durch die interne Retention gelöscht.
+Manifeste, Logs und das Ausgabehandbuch bleiben geschützt. Die Retention-Bereinigung wirkt direkt auf die sichtbaren Dateien unter `output/`.
 
 ## n8n- und Skript-Automatisierung
 

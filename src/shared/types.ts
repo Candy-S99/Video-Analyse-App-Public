@@ -10,7 +10,6 @@ export type JobPhase =
 export type ScreenshotRole = 'PRIMARY' | 'VARIANT';
 export type ScreenshotStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'SKIPPED' | 'FALLBACK' | 'PURGED';
 export type RetentionStatus = 'ACTIVE' | 'PURGED';
-export type ExternalStorageStatus = 'NOT_CONFIGURED' | 'PENDING' | 'COMPLETED' | 'FAILED';
 
 export interface FineSearchFrameMetadata {
   frame_id: string;
@@ -49,13 +48,6 @@ export interface ScreenshotProgress {
   screenshots_completed: number;
   screenshots_failed: number;
   fine_search_frames_examined: number;
-}
-
-export interface ScreenshotExternalStorage {
-  status: ExternalStorageStatus;
-  relative_path?: string;
-  copied_at?: string;
-  warning?: string;
 }
 
 export interface FailedSegment {
@@ -115,7 +107,6 @@ export interface AppConfig {
   extract_transcript: boolean;
   gemini_api_key_configured: boolean;
   data_dir: string;
-  external_output_dir?: string;
   fine_search_window_seconds: number;
   fine_search_interval_seconds: number;
   max_screenshots_per_candidate: number;
@@ -152,8 +143,6 @@ type KnownJobEventType =
   | 'SCREENSHOT_FALLBACK'
   | 'SCREENSHOT_PARTIAL'
   | 'SCREENSHOT_FAILED'
-  | 'EXTERNAL_COPY_COMPLETED'
-  | 'EXTERNAL_COPY_FAILED'
   | 'RETENTION_PREVIEW'
   | 'RETENTION_CLEANUP_COMPLETED';
 
@@ -168,7 +157,6 @@ export type JobOperation =
   | 'SCREENSHOT_EXTRACTION'
   | 'SCREENSHOT_EVALUATION'
   | 'SCREENSHOT_STORAGE'
-  | 'EXTERNAL_COPY'
   | 'RETENTION_CLEANUP';
 
 export interface JobTokenUsage {
@@ -231,7 +219,6 @@ export interface JobResult {
   status: JobStatus;
   phase: JobPhase;
   progress: ScreenshotProgress;
-  external_storage: ScreenshotExternalStorage;
   config_snapshot: JobConfigSnapshot;
   output_directory?: string;
   source: {

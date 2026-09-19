@@ -1,69 +1,68 @@
 # Video-Analyse-App
 
-Lokale Videoanalyse-App für öffentliche YouTube-Videos. Diese öffentliche Variante läuft als einzelner Docker-Container und speichert Jobs, Ergebnisse, Konfiguration und den lokalen Gemini-SecretStore im gemounteten Datenordner.
+Lokale Videoanalyse-App für öffentliche YouTube-Videos. Die öffentliche Variante läuft als einzelner Docker-Container und verwendet ein fertiges Image aus der GitHub Container Registry.
 
-## Voraussetzungen
+## Schnellstart per Release-ZIP
 
-- Docker Desktop oder Docker Engine mit Docker Compose.
-- Git für den öffentlichen Clone.
-- Internetzugriff für den ersten Image-Pull, Gemini und öffentliche YouTube-Quellen.
-- Node.js, npm, Python und ffmpeg müssen auf dem Host nicht installiert werden. Diese Laufzeitbestandteile befinden sich im Container.
+Für normale Installationen ist kein Git und keine Shell-Navigation erforderlich:
 
-## Schnellstart mit öffentlichem Docker-Image
+1. Docker Desktop installieren und starten.
+2. Das aktuelle ZIP aus den [GitHub Releases](https://github.com/Candy-S99/Video-Analyse-App-Public/releases) herunterladen.
+3. Das ZIP in einen eigenen Ordner entpacken.
+4. `Start.cmd` doppelklicken.
+5. Die Anwendung unter [http://localhost:3006](http://localhost:3006) öffnen.
+
+`Start.cmd` lädt das stabile GHCR-Image automatisch und startet den Container. Für echte Analysen muss anschließend unter `Einstellungen` ein eigener Gemini API Key hinterlegt werden.
+
+## Alternative: öffentlicher Repository-Clone
+
+Der bisherige Ablauf bleibt für Entwickler und technische Nutzer verfügbar:
 
 ```powershell
 git clone "https://github.com/Candy-S99/Video-Analyse-App-Public.git"
 Set-Location Video-Analyse-App-Public
-docker compose up -d
-docker compose ps
+docker compose -f compose.yaml up -d
 ```
 
-Das Repository ist öffentlich; für den Clone ist kein GitHub-Konto erforderlich. `docker compose up -d` lädt das versionierte Standard-Image `stable` automatisch aus der GitHub Container Registry. Für den ersten Start ist kein Gemini-Key und keine `.env`-Datei erforderlich.
-
-Für echte Analysen muss der Betreiber anschließend den eigenen Gemini-Key über `Einstellungen` hinterlegen.
-
-## Source-Build für Entwicklung
-
-Der normale Schnellstart verwendet ein fertiges Image. Für lokale Änderungen am Quellcode steht der Build-Override zur Verfügung:
+Für lokale Quellcodeänderungen wird der Entwicklungs-Override verwendet:
 
 ```powershell
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build -d
+docker compose -f compose.yaml -f compose.build.yaml up --build -d
 ```
 
-Dieser Weg baut das Image lokal aus dem [Dockerfile](Dockerfile). Die Tests verwenden denselben Override. Für normale Installationen ist `--build` nicht erforderlich.
+Node.js, npm, Python und ffmpeg müssen auf dem Host nicht installiert werden.
 
-In `.env` kann vor dem Start ein eigener Gemini-Key eingetragen werden:
+## Start, Stop und Update
 
-```dotenv
-GEMINI_API_KEY=dein-eigener-gemini-api-key
+Im Release-ZIP stehen folgende Skripte zur Verfügung:
+
+- `Start.cmd`: Image laden, Container starten und Browser öffnen.
+- `Stop.cmd`: Container stoppen; Daten bleiben erhalten.
+- `Update.cmd`: aktuelles Image laden, Container neu erstellen und Browser öffnen.
+
+Alternativ können dieselben Aktionen direkt mit Compose ausgeführt werden:
+
+```powershell
+docker compose -f compose.yaml restart
+docker compose -f compose.yaml down
+docker compose -f compose.yaml pull
+docker compose -f compose.yaml up -d
 ```
 
-Die Anwendung ist danach unter [http://localhost:3006](http://localhost:3006) erreichbar.
+`docker compose down` entfernt nicht das Volume `video-analysis-data`. Der kontrollierte Shutdown über die Weboberfläche beendet den Container ohne automatischen Neustart.
 
-## Gemini-Key konfigurieren
+## Gemini API Key
 
-Der Key ist für eine Analyse erforderlich, aber nicht für den Start des Containers.
+Der Key ist für eine Analyse erforderlich, aber nicht für den Containerstart.
 
-### Variante A: `.env` beim ersten Start
+Der empfohlene Weg ist die Weboberfläche:
 
-Wenn `GEMINI_API_KEY` beim ersten Start gesetzt ist, übernimmt die App ihn einmalig in den lokalen SecretStore unter:
-
-```text
-/data/jobs/.video-analysis-secrets.json
-```
-
-Durch den Mount `./data/jobs:/data/jobs` bleibt der Key über Container-Neustarts erhalten. Der SecretStore ist von Git ausgeschlossen.
-
-### Variante B: Einstellungen-UI
-
-Der Container kann mit leerem `GEMINI_API_KEY` gestartet werden. Danach:
-
-1. Weboberfläche öffnen.
+1. Anwendung öffnen.
 2. `Einstellungen` öffnen.
-3. Im Bereich `Gemini API Key` den Key eintragen.
+3. Gemini API Key eingeben.
 4. `API Key speichern` auswählen.
 
-Der Key wird serverseitig gespeichert und niemals vollständig zurückgegeben. Über die Einstellungen kann er auch wieder entfernt werden. Ein bereits vorhandener SecretStore wird durch spätere Änderungen an `.env` nicht automatisch überschrieben.
+Der Key wird serverseitig im Docker-Volume gespeichert und niemals vollständig zurückgegeben. Alternativ kann `GEMINI_API_KEY` beim Start über eine lokale `.env` gesetzt werden.
 
 Für lokale Automatisierung stehen dieselben Aktionen als API zur Verfügung:
 
@@ -83,87 +82,63 @@ Invoke-RestMethod -Method Delete `
 ```powershell
 Invoke-RestMethod http://localhost:3006/health
 Invoke-RestMethod http://localhost:3006/ready
-docker compose ps
-docker compose logs --tail=100 video-analysis-app
+docker compose -f compose.yaml ps
+docker compose -f compose.yaml logs --tail=100 video-analysis-app
 ```
 
-`/health` muss `status: ok` und `/ready` muss `status: ready` liefern. Der Compose-Healthcheck verwendet intern ebenfalls `/health`.
-
-## Stoppen, Neustart und Aktualisierung
-
-```powershell
-docker compose restart
-docker compose down
-docker compose pull
-docker compose up -d
-```
-
-`docker compose down` entfernt den Container, aber nicht die Dateien unter `data/jobs`. Der Restart-Modus `on-failure:5` startet den Container nach einem fehlerhaften Prozessende bis zu fünfmal neu. Ein kontrolliertes Herunterfahren über die App endet erfolgreich und bleibt beendet.
-
-### Feste Version oder Rollback
-
-Standardmäßig wird `stable` verwendet. Für einen reproduzierbaren Stand kann vor dem Start ein Versionstag gesetzt werden:
-
-```powershell
-$env:APP_IMAGE_TAG = 'v0.1.0'
-docker compose pull
-docker compose up -d
-```
-
-Für die Rückkehr zum aktuellen stabilen Stand:
-
-```powershell
-Remove-Item Env:APP_IMAGE_TAG -ErrorAction SilentlyContinue
-docker compose up -d
-```
+`/health` muss `status: ok` und `/ready` muss `status: ready` liefern.
 
 ## Persistente Daten
 
-- `data/jobs/`: Jobs, Manifeste, Transkripte, Videos, Screenshots, Konfiguration und SecretStore.
-- `external-output/`: optionaler externer Ausgabeordner für kopierte Screenshots.
-- `/tmp` im Container: temporäre Arbeitsdateien.
+Die Anwendung verwendet zwei Speicherbereiche:
 
-Die beiden Hostordner `data/jobs` und `external-output` dürfen nicht gelöscht werden, wenn Ergebnisse erhalten bleiben sollen. Externe Kopien werden nicht automatisch durch die Retention-Bereinigung entfernt.
+- `./output/`: vollständiger, sichtbarer Analyse-Output für den Benutzer.
+- Docker-Volume `video-analysis-data`: SecretStore, normale Konfiguration, Ereignislogs und technische Jobdaten.
+
+Der kanonische Output liegt ausschließlich unter `output/`. Retention-Bereinigung und Löschaktionen der App wirken daher direkt auf diesen Ordner.
+
+Die normale App-Konfiguration wird unter `/data/jobs/.video-analysis-config.json` gespeichert. Änderungen an Modell, Segmentlänge, Transkription und Screenshot-Einstellungen bleiben nach Neustarts erhalten.
 
 ## Konfiguration
 
-Die wichtigsten optionalen Variablen in `.env` sind:
+Eine `.env`-Datei ist beim Standardstart nicht erforderlich. Für fortgeschrittene Installationen können folgende Variablen gesetzt werden:
 
 | Variable | Standard | Bedeutung |
 |---|---:|---|
-| `GEMINI_API_KEY` | leer | Initialer Gemini-Key; alternativ über Einstellungen setzen |
-| `GEMINI_MODEL` | App-Standard | Zu verwendendes Gemini-Modell |
-| `SEGMENT_LENGTH` | `30` | Segmentlänge der Analyse in Sekunden |
-| `EXTRACT_TRANSCRIPT` | `true` | Transkriptextraktion aktivieren oder deaktivieren |
-| `APP_PORT` | `3006` | Host-Port der lokalen Weboberfläche |
-| `APP_IMAGE_TAG` | `stable` | Festes Image-Tag für Versionierung oder Rollback |
+| `GEMINI_API_KEY` | leer | Initialer Gemini-Key |
+| `GEMINI_MODEL` | App-Standard | Startwert für das Gemini-Modell |
+| `SEGMENT_LENGTH` | `30` | Segmentlänge in Sekunden |
+| `EXTRACT_TRANSCRIPT` | `true` | Transkriptextraktion aktivieren |
+| `APP_PORT` | `3006` | Lokaler Host-Port |
+| `APP_IMAGE_TAG` | `stable` | Image-Version oder Rollback-Tag |
+
+Für einen reproduzierbaren Stand:
+
+```powershell
+$env:APP_IMAGE_TAG = 'v0.1.0'
+docker compose -f compose.yaml pull
+docker compose -f compose.yaml up -d
+```
 
 ## Fehlerbehebung
 
-- **`.env` fehlt:** Das ist beim Standardstart unproblematisch. Eine `.env` wird nur benötigt, wenn Port, Image-Tag oder optionale Startwerte angepasst werden sollen.
-- **Port belegt:** In `.env` `APP_PORT` auf einen freien Host-Port setzen und die Anwendung über diesen Port öffnen.
-- **Container startet nicht:** `docker compose logs --tail=100 video-analysis-app` prüfen.
-- **Analyse verweigert:** Gemini-Key über `.env` beim ersten Start oder über `Einstellungen` hinterlegen.
+- **Docker nicht gefunden:** Docker Desktop installieren und starten.
+- **Port belegt:** In `.env` `APP_PORT` auf einen freien Port setzen; bei Verwendung der Skripte den Browser anschließend über diesen Port öffnen.
+- **Container startet nicht:** `docker compose -f compose.yaml logs --tail=100 video-analysis-app` prüfen.
+- **Analyse verweigert:** Gemini-Key über `Einstellungen` hinterlegen.
+- **Image- oder Pull-Fehler:** Docker-Daemon und Internetzugriff prüfen; anschließend `Update.cmd` erneut ausführen.
 - **YouTube-Fehler:** Nur öffentliche, ohne Login erreichbare Videos verwenden.
-- **Image- oder Pull-Fehler:** Docker-Daemon und Internetzugriff prüfen; anschließend `docker compose pull` ausführen.
-- **Source-Build-Fehler:** Für lokale Entwicklung `docker compose -f docker-compose.yml -f docker-compose.build.yml build --no-cache` verwenden.
 
 ## Sicherheit
 
-Die Compose-Datei bindet die Weboberfläche standardmäßig nur an `127.0.0.1`. Die App besitzt in diesem Setup keine Benutzeranmeldung und ist nicht für eine direkte öffentliche Internetfreigabe vorgesehen. Für LAN- oder Internetbetrieb sind eine bewusste Bind-Adresse, Authentifizierung, Rate-Limiting und ein abgesicherter Reverse Proxy erforderlich.
+Die Weboberfläche bindet standardmäßig nur an `127.0.0.1`. Die App besitzt keine Benutzeranmeldung und ist nicht für eine direkte öffentliche Internetfreigabe vorgesehen.
 
-## Automatische Prüfungen
+## Hinweise zu bestehenden Installationen
 
-GitHub Actions prüft bei Pull Requests und Pushes nach `main` die Dependency-Installation mit `npm ci`, die Tests, den Produktions-Build, die Compose-Konfiguration sowie einen Source-Docker-Start mit `/health`. Der Workflow benötigt keinen Gemini-Key und führt keine echte Videoanalyse aus.
+Der Release-ZIP-Weg ist für neue Installationen vorgesehen. Alte Installationen mit `./data/jobs:/data/jobs` und `external-output` werden nicht automatisch migriert. Vor einem Wechsel müssen vorhandene Daten manuell gesichert werden.
 
-Bei einem Versionstag wie `v0.1.0` baut ein separater Workflow das öffentliche Image für `linux/amd64` und `linux/arm64` und veröffentlicht es mit dem Versionstag sowie `stable` und `latest` in GHCR. Der normale Compose-Start lädt `stable`; für Rollbacks kann `APP_IMAGE_TAG` gesetzt werden.
-
-Dependabot überwacht npm-, Python-, Docker- und GitHub-Action-Abhängigkeiten. Automatische Update-PRs sind auf Sicherheitsupdates begrenzt.
+Weitere Informationen stehen in [output/README.md](output/README.md), [docs/operations/app-lifecycle.md](docs/operations/app-lifecycle.md) und [docs/integrations/api-automation.md](docs/integrations/api-automation.md).
 
 ## Lizenz
 
-Der Quellcode steht unter der [MIT-Lizenz](LICENSE). Die Anwendung darf weiterhin nur mit öffentlichen, ohne Login erreichbaren Videoquellen verwendet werden.
-
-Weitere Informationen zur Ausgabe und API-Nutzung stehen in [output/README.md](output/README.md). Die Details zum SecretStore und kontrollierten Herunterfahren stehen in [docs/operations/app-lifecycle.md](docs/operations/app-lifecycle.md).
-
-Die vollständige Übersicht zu REST-Schnittstellen, n8n-/Skript-Automatisierung, Polling, Schnittstellen-Netzwerk und Sicherheitsgrenzen steht in [docs/integrations/api-automation.md](docs/integrations/api-automation.md).
+Der Quellcode steht unter der MIT-Lizenz. Die Anwendung darf weiterhin nur mit öffentlichen, ohne Login erreichbaren Videoquellen verwendet werden.

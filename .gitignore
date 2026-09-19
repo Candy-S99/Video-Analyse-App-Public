@@ -7,11 +7,13 @@ coverage/
 .env*
 !.env.example
 .video-analysis-secrets.json
+.video-analysis-config.json
 data/jobs/*
 !data/jobs/.gitkeep
 temp/
-external-output/
 JSON Outputs/
+output/*
+!output/README.md
 output/playwright/
 .playwright-cli/
 .superpowers/
