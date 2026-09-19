@@ -136,6 +136,19 @@ export class OutputArtifactService {
   }
 
   private assertRegularPath(root: string, candidate: string): void {
+    let rootStat: fs.Stats;
+    try {
+      rootStat = fs.lstatSync(root);
+    } catch {
+      throw new OutputArtifactNotFoundError();
+    }
+    if (rootStat.isSymbolicLink()) {
+      throw new OutputArtifactPathError('Output-Jobordner ist ein symbolischer Link');
+    }
+    if (!rootStat.isDirectory()) {
+      throw new OutputArtifactNotFoundError();
+    }
+
     const relative = path.relative(root, candidate);
     let current = root;
     const components = relative.split(path.sep);

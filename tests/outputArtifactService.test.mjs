@@ -80,3 +80,19 @@ test('lehnt Symlink-Komponenten auch bei einem Ziel innerhalb des Jobordners ab'
     OutputArtifactPathError,
   );
 });
+
+test('lehnt eine Jobordner-Junction auf einen fremden Jobordner ab', () => {
+  const dataDir = createTempDataDir();
+  const jobDirectory = createOutputFixture(dataDir);
+  const foreignJobDirectory = path.join(dataDir, 'output', 'job-999--other-video');
+  fs.mkdirSync(foreignJobDirectory, { recursive: true });
+  fs.writeFileSync(path.join(foreignJobDirectory, 'manifest.json'), '{"status":"FAILED"}\n');
+  fs.rmSync(jobDirectory, { recursive: true });
+  fs.symlinkSync(foreignJobDirectory, jobDirectory, 'junction');
+  const service = new OutputArtifactService({ dataDir });
+
+  assert.throws(
+    () => service.resolve(createJob(), 'manifest.json'),
+    OutputArtifactPathError,
+  );
+});
