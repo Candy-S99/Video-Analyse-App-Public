@@ -36,7 +36,7 @@ Für normale Installationen ist kein Git und keine Shell-Navigation erforderlich
 
 ## Alternative: öffentlicher Repository-Clone
 
-Der bisherige Ablauf bleibt für Entwickler und technische Nutzer verfügbar:
+Ablauf für Entwickler und technische Nutzer verfügbar:
 
 ```powershell
 git clone "https://github.com/Candy-S99/Video-Analyse-App-Public.git"
