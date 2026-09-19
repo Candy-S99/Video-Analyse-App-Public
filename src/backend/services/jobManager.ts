@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { JobResult, AppConfig, JobConfigSnapshot, JobPhase, ScreenshotProgress } from '../../shared/types';
+import { JobResult, AppConfig, JobConfigSnapshot, JobPhase, ScreenshotProgress, OutputMode } from '../../shared/types';
 import { processVideoJob } from './videoProcessor';
 import { JobEventLogger } from './jobEventLogger';
 import { OutputArtifactWriter } from './outputArtifactWriter';
@@ -18,6 +18,7 @@ const DEFAULT_JOB_CONFIG_SNAPSHOT: JobConfigSnapshot = Object.freeze({
   model: 'gemini-3.8-flash',
   segment_length_seconds: 60,
   extract_transcript: true,
+  output_mode: 'both',
   fine_search_window_seconds: 2,
   fine_search_interval_seconds: 0.5,
   max_screenshots_per_candidate: 4,
@@ -97,6 +98,19 @@ export class InvalidJobIdError extends Error {
     super(`Invalid job ID: ${String(jobId)}`);
     this.name = 'InvalidJobIdError';
   }
+}
+
+export class InvalidOutputModeError extends Error {
+  public readonly code = 'INVALID_OUTPUT_MODE' as const;
+
+  constructor(value: unknown) {
+    super(`output_mode must be transcript, screenshots or both (received ${String(value)})`);
+    this.name = 'InvalidOutputModeError';
+  }
+}
+
+export function isOutputMode(value: unknown): value is OutputMode {
+  return value === 'transcript' || value === 'screenshots' || value === 'both';
 }
 
 export class JobManager {
@@ -336,11 +350,13 @@ export class JobManager {
     return /^gemini-[a-zA-Z0-9.\-]+$/.test(trimmed);
   }
 
-  private createJobConfigSnapshot(): JobConfigSnapshot {
+  private createJobConfigSnapshot(outputMode?: OutputMode): JobConfigSnapshot {
+    const resolvedOutputMode = outputMode || (this.config.extract_transcript ? 'both' : 'screenshots');
     return {
       model: this.config.model,
       segment_length_seconds: this.config.segment_length_seconds,
-      extract_transcript: this.config.extract_transcript,
+      extract_transcript: resolvedOutputMode !== 'screenshots',
+      output_mode: resolvedOutputMode,
       fine_search_window_seconds: this.config.fine_search_window_seconds,
       fine_search_interval_seconds: this.config.fine_search_interval_seconds,
       max_screenshots_per_candidate: this.config.max_screenshots_per_candidate,
@@ -358,15 +374,20 @@ export class JobManager {
     const interval = this.isPositiveFiniteNumber(snapshot.fine_search_interval_seconds)
       ? snapshot.fine_search_interval_seconds
       : DEFAULT_JOB_CONFIG_SNAPSHOT.fine_search_interval_seconds;
+    const legacyExtractTranscript = typeof snapshot.extract_transcript === 'boolean'
+      ? snapshot.extract_transcript
+      : DEFAULT_JOB_CONFIG_SNAPSHOT.extract_transcript;
+    const outputMode = isOutputMode(snapshot.output_mode)
+      ? snapshot.output_mode
+      : legacyExtractTranscript ? 'both' : 'screenshots';
 
     return {
       model: typeof snapshot.model === 'string' ? this.sanitizeModel(snapshot.model) : DEFAULT_JOB_CONFIG_SNAPSHOT.model,
       segment_length_seconds: this.isPositiveFiniteNumber(snapshot.segment_length_seconds)
         ? snapshot.segment_length_seconds
         : DEFAULT_JOB_CONFIG_SNAPSHOT.segment_length_seconds,
-      extract_transcript: typeof snapshot.extract_transcript === 'boolean'
-        ? snapshot.extract_transcript
-        : DEFAULT_JOB_CONFIG_SNAPSHOT.extract_transcript,
+      extract_transcript: outputMode !== 'screenshots',
+      output_mode: outputMode,
       fine_search_window_seconds: interval <= window ? window : DEFAULT_JOB_CONFIG_SNAPSHOT.fine_search_window_seconds,
       fine_search_interval_seconds: interval <= window ? interval : DEFAULT_JOB_CONFIG_SNAPSHOT.fine_search_interval_seconds,
       max_screenshots_per_candidate: Number.isInteger(snapshot.max_screenshots_per_candidate)
@@ -674,10 +695,11 @@ export class JobManager {
     }
   }
 
-  public createJob(url: string, correlationId?: string): JobResult {
+  public createJob(url: string, correlationId?: string, outputMode?: OutputMode): JobResult {
     if (this.shutdownRequested) throw new ApplicationShuttingDownError();
+    if (outputMode !== undefined && !isOutputMode(outputMode)) throw new InvalidOutputModeError(outputMode);
     const jobId = randomUUID();
-    const configSnapshot = this.createJobConfigSnapshot();
+    const configSnapshot = this.createJobConfigSnapshot(outputMode);
     const job: JobResult = {
       schema_version: CURRENT_JOB_SCHEMA_VERSION,
       job_id: jobId,

@@ -1,4 +1,5 @@
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'CANCELLED';
+export type OutputMode = 'transcript' | 'screenshots' | 'both';
 
 export type JobPhase =
   | 'ANALYSIS'
@@ -118,6 +119,7 @@ export interface JobConfigSnapshot {
   model: string;
   segment_length_seconds: number;
   extract_transcript: boolean;
+  output_mode: OutputMode;
   fine_search_window_seconds: number;
   fine_search_interval_seconds: number;
   max_screenshots_per_candidate: number;
@@ -248,4 +250,20 @@ export interface JobResult {
   created_at: string;
   completed_at?: string;
   failed_segments?: FailedSegment[];
+}
+
+export type OutputArtifactPreviewKind = 'image' | 'text' | 'none';
+
+export interface JobOutputArtifact {
+  relative_path: string;
+  file_name: string;
+  size_bytes: number;
+  mime_type: string;
+  preview_kind: OutputArtifactPreviewKind;
+}
+
+export interface JobOutputListing {
+  job_id: string;
+  output_directory: string;
+  artifacts: JobOutputArtifact[];
 }

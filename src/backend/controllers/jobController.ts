@@ -1,17 +1,42 @@
 import { Request, Response } from 'express';
-import { ApplicationShuttingDownError, InvalidConfigError, JobManager, jobManager } from '../services/jobManager';
+import { ApplicationShuttingDownError, InvalidConfigError, InvalidOutputModeError, isOutputMode, JobManager, jobManager } from '../services/jobManager';
 import fs from 'fs';
 import path from 'path';
 import { RetentionService } from '../services/retentionService';
 import { safeErrorMessage } from '../services/secretRedactor';
+import {
+  OutputArtifactNotFoundError,
+  OutputArtifactPathError,
+  OutputArtifactService,
+  OutputDirectoryNotFoundError,
+} from '../services/outputArtifactService';
+import { OutputArchiveRequestError, OutputArchiveService } from '../services/outputArchiveService';
 
 const safeControllerError = (manager: JobManager, error: unknown): string => safeErrorMessage(error, [manager.getSecretStore().getGeminiApiKey() || '']);
+const outputNotReady = (res: Response) => res.status(409).json({ error: { code: 'OUTPUT_NOT_READY', message: 'Der Output-Ordner ist erst nach Abschluss der Analyse verfügbar.' } });
+
+const outputErrorResponse = (res: Response, error: unknown) => {
+  if (error instanceof OutputArtifactPathError) {
+    return res.status(400).json({ error: { code: error.code, message: error.message } });
+  }
+  if (error instanceof OutputArchiveRequestError) {
+    return res.status(400).json({ error: { code: error.code, message: error.message } });
+  }
+  if (error instanceof OutputArtifactNotFoundError || error instanceof OutputDirectoryNotFoundError) {
+    return res.status(404).json({ error: { code: error.code, message: error.message } });
+  }
+  return res.status(500).json({ error: 'Output konnte nicht gelesen werden' });
+};
 
 const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
-  const { source_url, correlation_id } = req.body;
+  const { source_url, correlation_id, output_mode } = req.body;
   
   if (!source_url || typeof source_url !== 'string') {
     return res.status(400).json({ error: 'source_url is required and must be a string' });
+  }
+
+  if (output_mode !== undefined && !isOutputMode(output_mode)) {
+    return res.status(400).json({ error: { code: 'INVALID_OUTPUT_MODE', message: 'output_mode must be transcript, screenshots or both' } });
   }
 
   if (manager.isShuttingDown()) {
@@ -28,7 +53,7 @@ const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
   }
 
   try {
-    const job = manager.createJob(source_url, correlation_id);
+    const job = manager.createJob(source_url, correlation_id, output_mode);
     return res.status(202).json({
       job_id: job.job_id,
       status: job.status,
@@ -37,6 +62,9 @@ const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
   } catch (error: any) {
     if (error instanceof ApplicationShuttingDownError) {
       return res.status(503).json({ error: { code: 'APPLICATION_SHUTTING_DOWN', message: 'Die Anwendung wird gerade beendet und nimmt keine neuen Analysen an.' } });
+    }
+    if (error instanceof InvalidOutputModeError) {
+      return res.status(400).json({ error: { code: error.code, message: error.message } });
     }
     return res.status(500).json({ error: safeControllerError(manager, error) });
   }
@@ -68,6 +96,60 @@ const getJobStatusFor = (manager: JobManager) => (req: Request, res: Response) =
     },
     updated_at: new Date().toISOString()
   });
+};
+
+const getJobOutputFor = (manager: JobManager) => (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  try {
+    return res.status(200).json(new OutputArtifactService({ dataDir: manager.getConfig().data_dir }).list(job));
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
+};
+
+const getOutputArtifactFor = (manager: JobManager) => (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  const relativePath = typeof req.query.path === 'string' ? req.query.path : '';
+  const download = req.query.download === 'true';
+  try {
+    const artifact = new OutputArtifactService({ dataDir: manager.getConfig().data_dir }).resolve(job, relativePath);
+    if (download) res.attachment(artifact.file_name);
+    else res.type(artifact.mime_type);
+    return res.sendFile(artifact.absolute_path);
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
+};
+
+const createJobOutputArchiveFor = (manager: JobManager) => async (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  const archiveService = new OutputArchiveService({ dataDir: manager.getConfig().data_dir });
+  let artifacts;
+  try {
+    artifacts = archiveService.resolve(job, req.body?.paths);
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
+
+  res.status(200).type('application/zip').attachment(`${jobId}-output.zip`);
+  try {
+    await archiveService.stream(artifacts, res);
+  } catch (error) {
+    if (!res.headersSent) return outputErrorResponse(res, error);
+    res.destroy(error instanceof Error ? error : new Error('Output-Archiv konnte nicht erstellt werden'));
+  }
 };
 
 export const getJobResult = (req: Request, res: Response) => {
@@ -113,6 +195,7 @@ const updateGeminiApiKeyFor = (manager: JobManager) => (req: Request, res: Respo
 };
 
 export const createJob = createJobFor(jobManager);
+export const createJobOutputArchive = createJobOutputArchiveFor(jobManager);
 
 const deleteGeminiApiKeyFor = (manager: JobManager) => (_req: Request, res: Response) => {
   manager.deleteGeminiApiKey();
@@ -140,7 +223,10 @@ const updateConfigFor = (manager: JobManager) => (req: Request, res: Response) =
 
 export const createJobController = (manager: JobManager = jobManager) => ({
   createJob: createJobFor(manager),
+  createJobOutputArchive: createJobOutputArchiveFor(manager),
   getJobStatus: getJobStatusFor(manager),
+  getJobOutput: getJobOutputFor(manager),
+  getOutputArtifact: getOutputArtifactFor(manager),
   getConfig: getConfigFor(manager),
   updateConfig: updateConfigFor(manager),
   updateGeminiApiKey: updateGeminiApiKeyFor(manager),
@@ -148,6 +234,8 @@ export const createJobController = (manager: JobManager = jobManager) => ({
 });
 
 export const getJobStatus = getJobStatusFor(jobManager);
+export const getJobOutput = getJobOutputFor(jobManager);
+export const getOutputArtifact = getOutputArtifactFor(jobManager);
 export const updateConfig = updateConfigFor(jobManager);
 export const updateGeminiApiKey = updateGeminiApiKeyFor(jobManager);
 export const deleteGeminiApiKey = deleteGeminiApiKeyFor(jobManager);

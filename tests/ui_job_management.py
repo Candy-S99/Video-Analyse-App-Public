@@ -19,8 +19,28 @@ JOBS = [
         "created_at": "2026-09-13T18:11:42.000Z",
         "token_usage": {"prompt_tokens": 120, "candidate_tokens": 25, "total_tokens": 145, "reported_requests": 1},
         "cost_estimate": {"input_usd": 0.003, "output_usd": 0.0012, "estimated_usd": 0.0042, "priced_requests": 1, "currency": "USD"},
-    }
+    },
+    {
+        "job_id": "job-2",
+        "status": "COMPLETED",
+        "url": "https://www.youtube.com/watch?v=finished-output",
+        "title": "Fertiges Ergebnis",
+        "created_at": "2026-09-13T18:12:42.000Z",
+        "token_usage": {"prompt_tokens": 10, "candidate_tokens": 5, "total_tokens": 15, "reported_requests": 1},
+        "cost_estimate": {"input_usd": 0.001, "output_usd": 0.0002, "estimated_usd": 0.0012, "priced_requests": 1, "currency": "USD"},
+    },
 ]
+
+OUTPUT_LISTING = {
+    "job_id": "job-2",
+    "output_directory": "output/job-2--fertiges-ergebnis",
+    "artifacts": [
+        {"relative_path": "manifest.json", "file_name": "manifest.json", "size_bytes": 24, "mime_type": "application/json", "preview_kind": "text"},
+        {"relative_path": "02-transcript/transcript.txt", "file_name": "transcript.txt", "size_bytes": 17, "mime_type": "text/plain", "preview_kind": "text"},
+        {"relative_path": "06-screenshots/scene-001.png", "file_name": "scene-001.png", "size_bytes": 4, "mime_type": "image/png", "preview_kind": "image"},
+        {"relative_path": "03-video/video.mp4", "file_name": "video.mp4", "size_bytes": 1024, "mime_type": "video/mp4", "preview_kind": "none"},
+    ],
+}
 
 JOB_RESULT = {
     "schema_version": "1.0",
@@ -65,14 +85,26 @@ def fulfill_json(route, payload):
 with sync_playwright() as playwright:
     browser = playwright.chromium.launch(headless=True)
     page = browser.new_page(viewport={"width": 1440, "height": 1000})
+    page.add_init_script("""
+        window.__savedFiles = [];
+        window.showSaveFilePicker = async (options) => ({
+            createWritable: async () => ({
+                write: async (blob) => window.__savedFiles.push({ name: options.suggestedName, size: blob.size }),
+                close: async () => undefined,
+            }),
+        });
+    """)
     action_calls = []
     config_updates = []
+    job_create_calls = []
+    archive_calls = []
     request_state = {"reject_next_transcript_update": False}
     logs_cleared = False
     global_event_gets = 0
+    output_gets = 0
 
     def handle_route(route):
-        global logs_cleared, global_event_gets
+        global logs_cleared, global_event_gets, output_gets
         request = route.request
         if request.method == "GET" and request.url.endswith("/config"):
             fulfill_json(route, CONFIG)
@@ -91,8 +123,19 @@ with sync_playwright() as playwright:
                 fulfill_json(route, CONFIG)
         elif request.method == "GET" and request.url.endswith("/jobs"):
             fulfill_json(route, JOBS)
+        elif request.method == "POST" and request.url.endswith("/jobs"):
+            job_create_calls.append(json.loads(request.post_data or "{}"))
+            fulfill_json(route, {"job_id": "job-1", "status": "QUEUED", "created_at": JOBS[0]["created_at"]})
         elif request.method == "GET" and request.url.endswith("/jobs/job-1/result"):
             fulfill_json(route, JOB_RESULT)
+        elif request.method == "GET" and request.url.endswith("/jobs/job-2/output"):
+            output_gets += 1
+            fulfill_json(route, OUTPUT_LISTING)
+        elif request.method == "POST" and request.url.endswith("/jobs/job-2/output/archive"):
+            archive_calls.append(json.loads(request.post_data or "{}"))
+            route.fulfill(status=200, content_type="application/zip", body="PK-test-archive")
+        elif request.method == "GET" and request.url.startswith("http://127.0.0.1:3000/api/v1/video-analysis/jobs/job-2/output/file"):
+            route.fulfill(status=200, content_type="application/json", body='{"status":"COMPLETED"}\n')
         elif request.method == "GET" and request.url.endswith("/jobs/job-1/events"):
             fulfill_json(route, EVENTS)
         elif request.method == "GET" and request.url.endswith("/jobs/events"):
@@ -120,8 +163,9 @@ with sync_playwright() as playwright:
 
     assert page.locator("#quick-model-btn").is_visible()
     assert page.locator("#quick-segment-btn").is_visible()
-    transcript_button = page.locator("#quick-transcript-btn")
-    assert "Transkript an" in transcript_button.inner_text()
+    assert page.locator("#output-mode-both").get_attribute("aria-pressed") == "true"
+    assert page.locator("#output-mode-transcript").get_attribute("aria-pressed") == "false"
+    assert page.locator("#output-mode-screenshots").get_attribute("aria-pressed") == "false"
 
     page.locator("#quick-model-btn").click()
     assert page.locator("#quick-config-dialog").is_visible()
@@ -146,20 +190,51 @@ with sync_playwright() as playwright:
     assert {"segment_length_seconds": 15} in config_updates
     assert "15s Segmente" in page.locator("#quick-segment-btn").inner_text()
 
-    transcript_button.click()
+    page.locator("#output-mode-transcript").click()
+    assert page.locator("#output-mode-transcript").get_attribute("aria-pressed") == "true"
+    page.locator("#youtube-url-input").fill("https://www.youtube.com/watch?v=output-mode-test")
+    page.locator("#start-analysis-btn").click()
     page.wait_for_timeout(100)
-    assert {"extract_transcript": False} in config_updates
-    assert "Transkript aus" in transcript_button.inner_text()
-
-    request_state["reject_next_transcript_update"] = True
-    transcript_button.click()
-    page.wait_for_timeout(100)
-    assert "Transkript aus" in transcript_button.inner_text()
-    assert "Schnelleinstellung konnte nicht gespeichert werden" in page.locator("body").inner_text()
+    assert job_create_calls[-1]["output_mode"] == "transcript"
 
     page.locator("#settings-open-btn").click()
     assert page.locator("#settings-segment-option-15").is_visible()
     page.locator("#settings-close-button").click()
+
+    assert page.locator("#open-output-job-1").is_disabled()
+    assert page.locator("#open-output-job-2").is_enabled()
+    page.locator("#open-output-job-2").click()
+    page.wait_for_timeout(100)
+    assert output_gets == 1
+    assert page.locator("#output-artifacts-dialog").is_visible()
+    assert "manifest.json" in page.locator("#output-artifact-row-job-2-0").inner_text()
+    assert page.locator("#output-download-selected").is_disabled()
+    page.locator("#output-artifact-row-job-2-0").click()
+    page.wait_for_timeout(100)
+    assert "COMPLETED" in page.locator("#output-preview-job-2").inner_text()
+    assert "1 ausgewählt" in page.locator("#output-selection-toolbar").inner_text()
+    assert page.locator("#output-download-selected").is_enabled()
+    page.locator("#output-select-all").click()
+    assert page.locator("#output-selection-toolbar").inner_text().startswith("4 ausgewählt")
+    page.locator("#output-clear-selection").click()
+    assert "0 ausgewählt" in page.locator("#output-selection-toolbar").inner_text()
+    page.locator("#output-artifact-checkbox-job-2-0").check()
+    page.locator("#output-download-selected").click()
+    page.wait_for_timeout(150)
+    assert archive_calls == [{"paths": ["manifest.json"]}]
+    assert page.evaluate("window.__savedFiles")[-1]["name"] == "job-2-output.zip"
+    page.locator("#output-close-button").click()
+    assert page.locator("#open-output-explorer-job-2").count() == 0
+    assert page.locator("#open-output-menu-job-2").count() == 0
+
+    page.evaluate("delete window.showSaveFilePicker")
+    page.locator("#open-output-job-2").click()
+    page.wait_for_timeout(100)
+    page.locator("#output-artifact-checkbox-job-2-0").check()
+    with page.expect_download() as fallback_download:
+        page.locator("#output-download-selected").click()
+    assert fallback_download.value.suggested_filename == "job-2-output.zip"
+    page.locator("#output-close-button").click()
 
     assert page.locator("#open-youtube-job-1").get_attribute("target") == "_blank"
     assert page.locator("#open-youtube-job-1").get_attribute("href") == JOBS[0]["url"]

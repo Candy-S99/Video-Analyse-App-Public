@@ -136,23 +136,29 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
     // No download, no binary dependencies, no YouTube bot blocking.
     const fileUri = videoInfo.canonical_url;
     console.log(`Job ${job.job_id}: Using native Gemini YouTube understanding for ${fileUri}`);
-
-    // 2. Use the configured segment duration exactly as selected by the user.
-    const segmentDuration = job.analysis.segment_duration_seconds || 60;
-    const totalDuration = videoInfo.duration;
-    const segmentRanges = buildSegmentRanges(totalDuration, segmentDuration);
-    const totalSegments = segmentRanges.length;
-    job.analysis.segment_duration_seconds = segmentDuration;
-    job.analysis.segments_total = totalSegments;
-    job.progress.segments_total = totalSegments;
-    jobManager.throwIfCancellationRequested(job.job_id);
-    jobManager.saveJob(job);
+    const jobConfig = job.config_snapshot ?? jobManager.getConfig();
+    const outputMode = job.config_snapshot?.output_mode ?? (jobConfig.extract_transcript ? 'both' : 'screenshots');
+    const wantsTranscript = outputMode === 'transcript' || outputMode === 'both';
+    const wantsScreenshots = outputMode === 'screenshots' || outputMode === 'both';
 
     const inventory: InventoryItem[] = [];
     const failedSegments: FailedSegment[] = [];
     job.failed_segments = failedSegments;
+    let transcriptFailed = false;
 
-    console.log(`Job ${job.job_id}: Processing ${totalSegments} segments (duration: ${segmentDuration}s each, total: ${totalDuration}s)...`);
+    if (wantsScreenshots) {
+      // 2. Use the configured segment duration exactly as selected by the user.
+      const segmentDuration = job.analysis.segment_duration_seconds || 60;
+      const totalDuration = videoInfo.duration;
+      const segmentRanges = buildSegmentRanges(totalDuration, segmentDuration);
+      const totalSegments = segmentRanges.length;
+      job.analysis.segment_duration_seconds = segmentDuration;
+      job.analysis.segments_total = totalSegments;
+      job.progress.segments_total = totalSegments;
+      jobManager.throwIfCancellationRequested(job.job_id);
+      jobManager.saveJob(job);
+
+      console.log(`Job ${job.job_id}: Processing ${totalSegments} segments (duration: ${segmentDuration}s each, total: ${totalDuration}s)...`);
 
     // Process segments sequentially with pacing to avoid hitting rate limits
     for (let i = 0; i < totalSegments; i++) {
@@ -229,13 +235,13 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
       }
     }
 
-    if (job.analysis.segments_failed === totalSegments && totalSegments > 0) {
-       throw new Error("All segments failed during Stage 1 analysis.");
+      if (job.analysis.segments_failed === totalSegments && totalSegments > 0) {
+        throw new Error("All segments failed during Stage 1 analysis.");
+      }
     }
 
     // 4. Extract Transcript (if enabled)
-    const jobConfig = job.config_snapshot ?? jobManager.getConfig();
-    if (jobConfig.extract_transcript && fileUri) {
+    if (wantsTranscript && fileUri) {
       jobManager.throwIfCancellationRequested(job.job_id);
       job.phase = 'TRANSCRIPT_EXTRACTION';
       jobManager.saveJob(job);
@@ -253,24 +259,28 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
         const transcriptErrorMessage = safeMessage(transcriptError);
         console.warn(`Job ${job.job_id}: Transcript extraction failed: ${transcriptErrorMessage}`);
         job.warnings.push(`Transkript-Extraktion nicht möglich: ${transcriptErrorMessage}`);
+        transcriptFailed = true;
+        if (outputMode === 'transcript') throw transcriptError;
       }
     }
 
     // 5. Stage 2: Consolidate
-    jobManager.throwIfCancellationRequested(job.job_id);
-    job.phase = 'INVENTORY_CONSOLIDATION';
-    jobManager.saveJob(job);
-    console.log(`Job ${job.job_id}: Consolidating inventory...`);
-    const screenshotCandidates: ScreenshotCandidate[] = await geminiService.consolidateInventory(
-      inventory,
-      STAGE2_PROMPT,
-      job.analysis.model,
-      abortSignal,
-      createEventContext('INVENTORY_CONSOLIDATION'),
-    );
-    jobManager.throwIfCancellationRequested(job.job_id);
+    let screenshotCandidates: ScreenshotCandidate[] = [];
+    if (wantsScreenshots) {
+      jobManager.throwIfCancellationRequested(job.job_id);
+      job.phase = 'INVENTORY_CONSOLIDATION';
+      jobManager.saveJob(job);
+      console.log(`Job ${job.job_id}: Consolidating inventory...`);
+      screenshotCandidates = await geminiService.consolidateInventory(
+        inventory,
+        STAGE2_PROMPT,
+        job.analysis.model,
+        abortSignal,
+        createEventContext('INVENTORY_CONSOLIDATION'),
+      );
+      jobManager.throwIfCancellationRequested(job.job_id);
 
-    if (screenshotCandidates.length > 0) {
+      if (screenshotCandidates.length > 0) {
       job.phase = 'SCREENSHOT_EXTRACTION';
       job.progress.candidates_total = screenshotCandidates.length;
       jobManager.saveJob(job);
@@ -303,7 +313,8 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
           }
         }
       }
-      jobManager.getEventLogger().append({ job_id: job.job_id, type: 'SCREENSHOT_PHASE_COMPLETED', operation: 'SCREENSHOT_EXTRACTION', provider: 'app' });
+        jobManager.getEventLogger().append({ job_id: job.job_id, type: 'SCREENSHOT_PHASE_COMPLETED', operation: 'SCREENSHOT_EXTRACTION', provider: 'app' });
+      }
     }
     
     // Cleanup Gemini file
@@ -315,7 +326,7 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
     jobManager.throwIfCancellationRequested(job.job_id);
     job.phase = 'FINALIZING';
     job.screenshot_candidates = screenshotCandidates;
-    job.status = job.analysis.segments_failed > 0 || job.progress.screenshots_failed > 0 ? 'PARTIAL' : 'COMPLETED';
+    job.status = transcriptFailed || job.analysis.segments_failed > 0 || job.progress.screenshots_failed > 0 ? 'PARTIAL' : 'COMPLETED';
     job.completed_at = new Date().toISOString();
     jobManager.saveJob(job);
     console.log(`Job ${job.job_id} completed with status ${job.status}`);
