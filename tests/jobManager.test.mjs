@@ -358,6 +358,7 @@ test('normalisiert einen abgeschlossenen Legacy-Job deterministisch und persisti
     model: 'gemini-3.8-flash',
     segment_length_seconds: 60,
     extract_transcript: true,
+    output_mode: 'both',
     fine_search_window_seconds: 2,
     fine_search_interval_seconds: 0.5,
     max_screenshots_per_candidate: 4,
@@ -506,6 +507,33 @@ test('verwendet bei der tatsächlichen Verarbeitung den Snapshot vor updateConfi
     geminiService.consolidateInventory = originalConsolidateInventory;
     geminiService.extractTranscript = originalExtractTranscript;
   }
+});
+
+test('normalisiert Legacy-Snapshots ohne output_mode kompatibel', () => {
+  const manager = new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
+  const legacyJob = createJob('00000000-0000-4000-8000-000000000004');
+
+  legacyJob.config_snapshot = {
+    model: 'gemini-3.8-flash',
+    segment_length_seconds: 60,
+    extract_transcript: false,
+    fine_search_window_seconds: 2,
+    fine_search_interval_seconds: 0.5,
+    max_screenshots_per_candidate: 4,
+    fine_search_fallback: 'exact_timestamp',
+    automatic_cleanup_enabled: true,
+  };
+  manager.saveJob(legacyJob);
+
+  assert.equal(manager.getJob(legacyJob.job_id).config_snapshot.output_mode, 'screenshots');
+});
+
+test('createJob speichert den pro Job gewählten Output-Modus', () => {
+  const manager = new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
+
+  const created = manager.createJob('https://www.youtube.com/watch?v=output-mode', undefined, 'transcript');
+
+  assert.equal(created.config_snapshot.output_mode, 'transcript');
 });
 
 test('cancelling an active job preserves partial progress and status', async () => {

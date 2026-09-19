@@ -188,6 +188,36 @@ test('POST /jobs verweigert neue Analysen ohne API-Key verständlich', () => {
   });
 });
 
+test('POST /jobs übernimmt einen gültigen Output-Modus in den Job-Snapshot', () => {
+  const manager = createSecretManager().manager;
+  manager.setGeminiApiKey('test-controller-secret');
+  const controller = createJobController(manager);
+  const response = createResponseRecorder();
+
+  controller.createJob(createRequest({
+    source_url: 'https://www.youtube.com/watch?v=transcript-only',
+    output_mode: 'transcript',
+  }), response);
+
+  assert.equal(response.statusCode, 202);
+  assert.equal(manager.getJob(response.body.job_id).config_snapshot.output_mode, 'transcript');
+});
+
+test('POST /jobs lehnt unbekannte Output-Modi ab', () => {
+  const manager = createSecretManager().manager;
+  manager.setGeminiApiKey('test-controller-secret');
+  const controller = createJobController(manager);
+  const response = createResponseRecorder();
+
+  controller.createJob(createRequest({
+    source_url: 'https://www.youtube.com/watch?v=invalid-output-mode',
+    output_mode: 'audio',
+  }), response);
+
+  assert.equal(response.statusCode, 400);
+  assert.equal(response.body.error.code, 'INVALID_OUTPUT_MODE');
+});
+
 test('Output-Liste ist nur für terminale Jobs verfügbar und enthält keine absoluten Pfade', () => {
   const manager = createManager();
   const controller = createJobController(manager);

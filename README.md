@@ -118,6 +118,8 @@ Die Anwendung verwendet zwei Speicherbereiche:
 Der kanonische Output liegt ausschließlich unter `output/`. Retention-Bereinigung und Löschaktionen der App wirken daher direkt auf diesen Ordner.
 
 Die normale App-Konfiguration wird unter `/data/jobs/.video-analysis-config.json` gespeichert. Änderungen an Modell, Segmentlänge, Transkription und Screenshot-Einstellungen bleiben nach Neustarts erhalten.
+Für einen abgeschlossenen Job kann in der Jobliste `Output öffnen` ausgewählt werden. Der Browser-Viewer listet die Dateien aus dem kanonischen Jobordner auf und stellt unterstützte Text- und Bilddateien als Vorschau sowie andere Dateien als Download bereit. Der Viewer funktioniert unabhängig davon, ob Windows oder ein anderes Betriebssystem verwendet wird.
+Ein Klick auf eine Dateizeile öffnet die Vorschau und markiert die Datei. Über die Checkboxen und die Toolbar können mehrere Dateien ausgewählt und als ein ZIP-Archiv heruntergeladen werden. Einzel- und Sammeldownloads öffnen nach Möglichkeit den nativen Speichern-unter-Dialog; ohne diese Browser-API wird der normale Browser-Download verwendet.
 
 ## Konfiguration
 
@@ -128,7 +130,7 @@ Eine `.env`-Datei ist beim Standardstart nicht erforderlich. Für fortgeschritte
 | `GEMINI_API_KEY` | leer | Initialer Gemini-Key |
 | `GEMINI_MODEL` | App-Standard | Startwert für das Gemini-Modell |
 | `SEGMENT_LENGTH` | `30` | Segmentlänge in Sekunden |
-| `EXTRACT_TRANSCRIPT` | `true` | Transkriptextraktion aktivieren |
+| `EXTRACT_TRANSCRIPT` | `true` | Legacy-Standard für Aufrufe ohne `output_mode` (`true` = `both`, `false` = `screenshots`) |
 | `APP_PORT` | `3006` | Lokaler Host-Port |
 | `APP_IMAGE_TAG` | `stable` | Image-Version oder Rollback-Tag |
 

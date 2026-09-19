@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { ApplicationShuttingDownError, InvalidConfigError, JobManager, jobManager } from '../services/jobManager';
+import { ApplicationShuttingDownError, InvalidConfigError, InvalidOutputModeError, isOutputMode, JobManager, jobManager } from '../services/jobManager';
 import fs from 'fs';
 import path from 'path';
 import { RetentionService } from '../services/retentionService';
@@ -29,10 +29,14 @@ const outputErrorResponse = (res: Response, error: unknown) => {
 };
 
 const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
-  const { source_url, correlation_id } = req.body;
+  const { source_url, correlation_id, output_mode } = req.body;
   
   if (!source_url || typeof source_url !== 'string') {
     return res.status(400).json({ error: 'source_url is required and must be a string' });
+  }
+
+  if (output_mode !== undefined && !isOutputMode(output_mode)) {
+    return res.status(400).json({ error: { code: 'INVALID_OUTPUT_MODE', message: 'output_mode must be transcript, screenshots or both' } });
   }
 
   if (manager.isShuttingDown()) {
@@ -49,7 +53,7 @@ const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
   }
 
   try {
-    const job = manager.createJob(source_url, correlation_id);
+    const job = manager.createJob(source_url, correlation_id, output_mode);
     return res.status(202).json({
       job_id: job.job_id,
       status: job.status,
@@ -58,6 +62,9 @@ const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
   } catch (error: any) {
     if (error instanceof ApplicationShuttingDownError) {
       return res.status(503).json({ error: { code: 'APPLICATION_SHUTTING_DOWN', message: 'Die Anwendung wird gerade beendet und nimmt keine neuen Analysen an.' } });
+    }
+    if (error instanceof InvalidOutputModeError) {
+      return res.status(400).json({ error: { code: error.code, message: error.message } });
     }
     return res.status(500).json({ error: safeControllerError(manager, error) });
   }

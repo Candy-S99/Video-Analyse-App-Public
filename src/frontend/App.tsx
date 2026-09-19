@@ -16,15 +16,13 @@ import {
   Check,
   RefreshCw,
   ExternalLink,
-  FolderOpen,
-  ChevronDown,
   Layers,
   Trash2,
   XCircle,
   Maximize2,
   Power
 } from 'lucide-react';
-import { JobResult, JobStatus, AppConfig, JobEventsResponse, JobOutputArtifact, JobOutputListing } from '../shared/types';
+import { JobResult, JobStatus, AppConfig, JobEventsResponse, JobOutputArtifact, JobOutputListing, OutputMode } from '../shared/types';
 import { SettingsModal } from './components/SettingsModal';
 import { TranscriptView } from './components/TranscriptView';
 import { ScreenshotCandidatesView } from './components/ScreenshotCandidatesView';
@@ -94,7 +92,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [quickConfigPanel, setQuickConfigPanel] = useState<QuickConfigPanel | null>(null);
-  const [transcriptSaving, setTranscriptSaving] = useState(false);
+  const [outputMode, setOutputMode] = useState<OutputMode>('both');
   const [activeTab, setActiveTab] = useState<'screenshots' | 'transcript' | 'json'>('screenshots');
   const [copiedJson, setCopiedJson] = useState(false);
   const [actionJobId, setActionJobId] = useState<string | null>(null);
@@ -113,13 +111,14 @@ export default function App() {
   const [shutdownActiveJobs, setShutdownActiveJobs] = useState(0);
   const [isShutdownDialogOpen, setIsShutdownDialogOpen] = useState(false);
   const [openOutputJobId, setOpenOutputJobId] = useState<string | null>(null);
-  const [openOutputMenuJobId, setOpenOutputMenuJobId] = useState<string | null>(null);
   const [outputListing, setOutputListing] = useState<JobOutputListing | null>(null);
   const [outputLoading, setOutputLoading] = useState(false);
   const [outputError, setOutputError] = useState('');
   const [selectedOutputArtifact, setSelectedOutputArtifact] = useState<JobOutputArtifact | null>(null);
   const [outputPreviewText, setOutputPreviewText] = useState('');
   const [outputPreviewLoading, setOutputPreviewLoading] = useState(false);
+  const [selectedOutputPaths, setSelectedOutputPaths] = useState<Set<string>>(new Set());
+  const [archiveDownloading, setArchiveDownloading] = useState(false);
   
   // Theme Management (Dark Mode)
   const [isDark, setIsDark] = useState<boolean>(() => {
@@ -181,23 +180,6 @@ export default function App() {
     return success;
   };
 
-  const toggleTranscript = async () => {
-    if (!config || transcriptSaving) return;
-
-    const previousConfig = config;
-    const nextExtractTranscript = !previousConfig.extract_transcript;
-    setError('');
-    setTranscriptSaving(true);
-    setConfig({ ...previousConfig, extract_transcript: nextExtractTranscript });
-
-    const success = await saveConfig({ extract_transcript: nextExtractTranscript });
-    if (!success) {
-      setConfig(previousConfig);
-      setError('Schnelleinstellung konnte nicht gespeichert werden.');
-    }
-    setTranscriptSaving(false);
-  };
-
   const saveApiKey = async (apiKey: string): Promise<boolean> => {
     const res = await safeFetchJson<{ gemini_api_key_configured: boolean }>('/api/v1/video-analysis/config/gemini-api-key', {
       method: 'PUT',
@@ -235,14 +217,47 @@ export default function App() {
     return `/api/v1/video-analysis/jobs/${encodeURIComponent(jobId)}/output/file?${query.toString()}`;
   };
 
+  const saveBlobLocally = async (blob: Blob, suggestedName: string, mimeType: string): Promise<void> => {
+    const picker = (window as Window & {
+      showSaveFilePicker?: (options: {
+        suggestedName: string;
+        types?: Array<{ description: string; accept: Record<string, string[]> }>;
+      }) => Promise<{ createWritable: () => Promise<{ write: (value: Blob) => Promise<void>; close: () => Promise<void> }> }>;
+    }).showSaveFilePicker;
+
+    if (picker) {
+      try {
+        const extension = suggestedName.includes('.') ? `.${suggestedName.split('.').pop()}` : undefined;
+        const handle = await picker({
+          suggestedName,
+          ...(extension ? { types: [{ description: mimeType === 'application/zip' ? 'ZIP-Archiv' : 'Output-Datei', accept: { [mimeType]: [extension] } }] } : {}),
+        });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        return;
+      } catch (pickerError: any) {
+        if (pickerError?.name === 'AbortError') return;
+        throw pickerError;
+      }
+    }
+
+    const objectUrl = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = objectUrl;
+    anchor.download = suggestedName;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 0);
+  };
+
   const handleOpenOutput = async (job: { job_id: string; status: JobStatus; title?: string }) => {
     if (!isTerminalJobStatus(job.status)) return;
-    setOpenOutputMenuJobId(null);
     setOpenOutputJobId(job.job_id);
     setOutputListing(null);
     setSelectedOutputArtifact(null);
     setOutputPreviewText('');
     setOutputPreviewLoading(false);
+    setSelectedOutputPaths(new Set());
     setOutputError('');
     setOutputLoading(true);
     const res = await safeFetchJson<JobOutputListing>(`/api/v1/video-analysis/jobs/${encodeURIComponent(job.job_id)}/output`);
@@ -274,13 +289,65 @@ export default function App() {
     }
   };
 
+  const toggleOutputArtifact = (artifact: JobOutputArtifact) => {
+    setSelectedOutputPaths(previous => {
+      const next = new Set(previous);
+      if (next.has(artifact.relative_path)) next.delete(artifact.relative_path);
+      else next.add(artifact.relative_path);
+      return next;
+    });
+  };
+
+  const selectAllOutputArtifacts = () => {
+    setSelectedOutputPaths(new Set(outputListing?.artifacts.map(artifact => artifact.relative_path) ?? []));
+  };
+
+  const clearOutputSelection = () => setSelectedOutputPaths(new Set());
+
+  const downloadOutputArtifact = async (artifact: JobOutputArtifact) => {
+    if (!openOutputJobId) return;
+    setOutputError('');
+    try {
+      const response = await fetch(outputArtifactUrl(openOutputJobId, artifact.relative_path, true));
+      if (!response.ok) throw new Error(`Server antwortete mit Status ${response.status}`);
+      const blob = await response.blob();
+      await saveBlobLocally(blob, artifact.file_name, artifact.mime_type);
+    } catch (downloadError: any) {
+      setOutputError(`Download fehlgeschlagen: ${downloadError?.message || 'Unbekannter Fehler'}`);
+    }
+  };
+
+  const downloadSelectedOutputArtifacts = async () => {
+    if (!openOutputJobId || selectedOutputPaths.size === 0 || archiveDownloading) return;
+    setArchiveDownloading(true);
+    setOutputError('');
+    try {
+      const response = await fetch(`/api/v1/video-analysis/jobs/${encodeURIComponent(openOutputJobId)}/output/archive`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths: Array.from(selectedOutputPaths) }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => undefined);
+        const message = body?.error?.message || body?.error || `Server antwortete mit Status ${response.status}`;
+        throw new Error(message);
+      }
+      const blob = await response.blob();
+      await saveBlobLocally(blob, `${openOutputJobId}-output.zip`, 'application/zip');
+    } catch (downloadError: any) {
+      setOutputError(`Sammeldownload fehlgeschlagen: ${downloadError?.message || 'Unbekannter Fehler'}`);
+    } finally {
+      setArchiveDownloading(false);
+    }
+  };
+
   const closeOutputDialog = () => {
     setOpenOutputJobId(null);
-    setOpenOutputMenuJobId(null);
     setOutputListing(null);
     setSelectedOutputArtifact(null);
     setOutputPreviewText('');
     setOutputPreviewLoading(false);
+    setSelectedOutputPaths(new Set());
     setOutputError('');
   };
 
@@ -331,7 +398,7 @@ export default function App() {
     const res = await safeFetchJson<{ job_id: string; status: string }>('/api/v1/video-analysis/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_url: url })
+      body: JSON.stringify({ source_url: url, output_mode: outputMode })
     });
 
     setLoading(false);
@@ -578,22 +645,23 @@ export default function App() {
                   >
                     {config.segment_length_seconds}s Segmente
                   </button>
-                  <button
-                    id="quick-transcript-btn"
-                    type="button"
-                    aria-pressed={config.extract_transcript}
-                    disabled={transcriptSaving}
-                    onClick={() => void toggleTranscript()}
-                    className={`rounded-lg border px-2 py-1 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:cursor-wait disabled:opacity-60 ${
-                      config.extract_transcript
-                        ? 'border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800/60 dark:bg-indigo-950/50 dark:text-indigo-300 dark:hover:bg-indigo-900/60'
-                        : 'border-stone-200 bg-stone-100 text-stone-600 hover:bg-stone-200 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'
-                    }`}
-                  >
-                    {transcriptSaving ? 'Speichere …' : config.extract_transcript ? 'Transkript an' : 'Transkript aus'}
-                  </button>
                 </div>
               )}
+
+              <div id="output-mode-selector" className="flex items-center gap-1 rounded-lg border border-stone-200 bg-stone-100 p-1 dark:border-stone-700 dark:bg-stone-800" aria-label="Ausgabemodus">
+                {([['transcript', 'Nur Transkript'], ['screenshots', 'Nur Screenshots'], ['both', 'Beides']] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    id={`output-mode-${mode}`}
+                    type="button"
+                    aria-pressed={outputMode === mode}
+                    onClick={() => setOutputMode(mode)}
+                    className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 ${outputMode === mode ? 'bg-white text-indigo-700 shadow-sm dark:bg-stone-700 dark:text-indigo-300' : 'text-stone-600 hover:bg-white/70 dark:text-stone-400 dark:hover:bg-stone-700/70'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
 
               {/* Dark Mode Switch Button */}
               <button
@@ -749,55 +817,18 @@ export default function App() {
                       </div>
                     </button>
                     <div className="flex items-center gap-1 pr-2">
-                      <div className="relative flex items-center">
-                        <button
-                          id={`open-output-${job.job_id}`}
-                          type="button"
-                          onClick={() => void handleOpenOutput(job)}
-                          disabled={!isTerminalJobStatus(job.status)}
-                          title={isTerminalJobStatus(job.status) ? 'Output-Artefakte im Browser ansehen' : 'Output steht erst nach Abschluss der Analyse zur Verfügung'}
-                          aria-label={`Output von ${job.title || job.job_id} öffnen`}
-                          className="px-2.5 py-2 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-l-lg border border-indigo-200 dark:border-indigo-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-xs font-semibold"
-                        >
-                          <FolderOpen className="w-4 h-4" />
-                          <span className="hidden xl:inline">Output</span>
-                        </button>
-                        <button
-                          id={`open-output-menu-${job.job_id}`}
-                          type="button"
-                          onClick={() => setOpenOutputMenuJobId(current => current === job.job_id ? null : job.job_id)}
-                          disabled={!isTerminalJobStatus(job.status)}
-                          aria-haspopup="menu"
-                          aria-expanded={openOutputMenuJobId === job.job_id}
-                          aria-label="Weitere Output-Optionen"
-                          title="Weitere Output-Optionen"
-                          className="px-1.5 py-2 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-r-lg border-y border-r border-indigo-200 dark:border-indigo-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                        >
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </button>
-                        {openOutputMenuJobId === job.job_id && isTerminalJobStatus(job.status) && (
-                          <div role="menu" className="absolute right-0 top-full z-20 mt-1 min-w-[190px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 p-1 shadow-xl">
-                            <a
-                              id={`open-output-explorer-${job.job_id}`}
-                              role="menuitem"
-                              href={`video-analysis-output:job/${encodeURIComponent(job.job_id)}`}
-                              onClick={() => setOpenOutputMenuJobId(null)}
-                              className="block rounded-lg px-3 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800"
-                            >
-                              Im Explorer öffnen
-                            </a>
-                            <button
-                              id={`open-output-browser-${job.job_id}`}
-                              role="menuitem"
-                              type="button"
-                              onClick={() => void handleOpenOutput(job)}
-                              className="w-full text-left rounded-lg px-3 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800"
-                            >
-                              Im Browser ansehen
-                            </button>
-                          </div>
-                        )}
-                      </div>
+                      <button
+                        id={`open-output-${job.job_id}`}
+                        type="button"
+                        onClick={() => void handleOpenOutput(job)}
+                        disabled={!isTerminalJobStatus(job.status)}
+                        title={isTerminalJobStatus(job.status) ? 'Output-Artefakte im Browser ansehen' : 'Output steht erst nach Abschluss der Analyse zur Verfügung'}
+                        aria-label={`Output von ${job.title || job.job_id} im Browser ansehen`}
+                        className="px-2.5 py-2 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg border border-indigo-200 dark:border-indigo-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-xs font-semibold"
+                      >
+                        <Layers className="w-4 h-4" />
+                        <span className="hidden xl:inline">Output</span>
+                      </button>
                       <div
                         id={`token-usage-${job.job_id}`}
                         aria-label={`Token gesamt: ${job.token_usage?.total_tokens ? Number(job.token_usage.total_tokens).toLocaleString('de-DE') : 'nicht gemeldet'}`}
@@ -982,11 +1013,18 @@ export default function App() {
         loading={outputLoading}
         error={outputError}
         selectedArtifact={selectedOutputArtifact}
+        selectedArtifactPaths={selectedOutputPaths}
         previewText={outputPreviewText}
         previewLoading={outputPreviewLoading}
-        artifactUrl={(relativePath, download = false) => outputArtifactUrl(openOutputJobId || '', relativePath, download)}
+        archiveDownloading={archiveDownloading}
+        artifactUrl={(relativePath) => outputArtifactUrl(openOutputJobId || '', relativePath)}
         onClose={closeOutputDialog}
         onSelectArtifact={artifact => void handleSelectOutputArtifact(artifact)}
+        onToggleArtifact={toggleOutputArtifact}
+        onSelectAll={selectAllOutputArtifacts}
+        onClearSelection={clearOutputSelection}
+        onDownloadSelected={() => void downloadSelectedOutputArtifacts()}
+        onDownloadArtifact={artifact => void downloadOutputArtifact(artifact)}
       />
 
       <DetailFullscreenDialog

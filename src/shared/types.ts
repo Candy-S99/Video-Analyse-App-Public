@@ -1,4 +1,5 @@
 export type JobStatus = 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL' | 'FAILED' | 'CANCELLED';
+export type OutputMode = 'transcript' | 'screenshots' | 'both';
 
 export type JobPhase =
   | 'ANALYSIS'
@@ -118,6 +119,7 @@ export interface JobConfigSnapshot {
   model: string;
   segment_length_seconds: number;
   extract_transcript: boolean;
+  output_mode: OutputMode;
   fine_search_window_seconds: number;
   fine_search_interval_seconds: number;
   max_screenshots_per_candidate: number;

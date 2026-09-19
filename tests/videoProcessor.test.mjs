@@ -126,3 +126,138 @@ test('verwendet 60 Sekunden exakt ohne automatische Anhebung', async () => {
   assert.deepEqual(ranges[9], { start: 540, end: 600 });
   assert.deepEqual(ranges[10], { start: 600, end: 620 });
 });
+
+function createModeJob(dataDir, outputMode) {
+  const jobId = randomUUID();
+  const manager = new JobManager({ dataDir, processor: async () => {} });
+  const job = {
+    schema_version: '2.0',
+    job_id: jobId,
+    correlation_id: jobId,
+    status: 'PROCESSING',
+    phase: 'ANALYSIS',
+    progress: {
+      segments_completed: 0,
+      segments_total: 0,
+      candidates_completed: 0,
+      candidates_total: 0,
+      screenshots_completed: 0,
+      screenshots_failed: 0,
+      fine_search_frames_examined: 0,
+    },
+    external_storage: { status: 'NOT_CONFIGURED' },
+    config_snapshot: {
+      model: 'gemini-3.8-flash',
+      extract_transcript: outputMode !== 'screenshots',
+      output_mode: outputMode,
+      segment_length_seconds: 60,
+      fine_search_window_seconds: 2,
+      fine_search_interval_seconds: 0.5,
+      max_screenshots_per_candidate: 4,
+      fine_search_fallback: 'exact_timestamp',
+      automatic_cleanup_enabled: true,
+    },
+    source: { type: 'youtube', url: 'https://www.youtube.com/watch?v=mode-test' },
+    video: {},
+    analysis: {
+      model: 'gemini-3.8-flash',
+      processing_mode: 'static_segments',
+      segment_duration_seconds: 60,
+      segments_total: 0,
+      segments_successful: 0,
+      segments_failed: 0,
+    },
+    inventory: [],
+    screenshot_candidates: [],
+    warnings: [],
+    errors: [],
+    created_at: '2026-09-19T10:00:00.000Z',
+  };
+  manager.saveJob(job);
+  return { job, manager };
+}
+
+test('transcript-Modus überspringt visuelle Analyse und Screenshot-Pipeline', async () => {
+  const { job, manager } = createModeJob(createTempDataDir(), 'transcript');
+  const originals = {
+    getVideoInfo: youtubeService.getVideoInfo,
+    analyzeSegment: geminiService.analyzeSegment,
+    consolidateInventory: geminiService.consolidateInventory,
+    extractTranscript: geminiService.extractTranscript,
+  };
+  let transcriptCalls = 0;
+  youtubeService.getVideoInfo = async () => ({ title: 'Nur Transkript', duration: 1, id: 'transcript-only', canonical_url: 'https://www.youtube.com/watch?v=transcript-only' });
+  geminiService.analyzeSegment = async () => { throw new Error('visuelle Analyse darf nicht laufen'); };
+  geminiService.consolidateInventory = async () => { throw new Error('Inventar darf nicht laufen'); };
+  geminiService.extractTranscript = async () => { transcriptCalls += 1; return { full_text: 'Nur Text', segments: [] }; };
+
+  try {
+    await processVideoJob(job, manager);
+  } finally {
+    youtubeService.getVideoInfo = originals.getVideoInfo;
+    geminiService.analyzeSegment = originals.analyzeSegment;
+    geminiService.consolidateInventory = originals.consolidateInventory;
+    geminiService.extractTranscript = originals.extractTranscript;
+  }
+
+  assert.equal(transcriptCalls, 1);
+  assert.equal(job.transcript.full_text, 'Nur Text');
+  assert.deepEqual(job.inventory, []);
+  assert.deepEqual(job.screenshot_candidates, []);
+  assert.equal(job.status, 'COMPLETED');
+});
+
+test('screenshots-Modus überspringt Transkript-Extraktion', async () => {
+  const { job, manager } = createModeJob(createTempDataDir(), 'screenshots');
+  const originals = {
+    getVideoInfo: youtubeService.getVideoInfo,
+    analyzeSegment: geminiService.analyzeSegment,
+    consolidateInventory: geminiService.consolidateInventory,
+    extractTranscript: geminiService.extractTranscript,
+  };
+  let transcriptCalls = 0;
+  youtubeService.getVideoInfo = async () => ({ title: 'Nur Screenshots', duration: 1, id: 'screenshots-only', canonical_url: 'https://www.youtube.com/watch?v=screenshots-only' });
+  geminiService.analyzeSegment = async () => [];
+  geminiService.consolidateInventory = async () => [];
+  geminiService.extractTranscript = async () => { transcriptCalls += 1; throw new Error('Transkript darf nicht laufen'); };
+
+  try {
+    await processVideoJob(job, manager);
+  } finally {
+    youtubeService.getVideoInfo = originals.getVideoInfo;
+    geminiService.analyzeSegment = originals.analyzeSegment;
+    geminiService.consolidateInventory = originals.consolidateInventory;
+    geminiService.extractTranscript = originals.extractTranscript;
+  }
+
+  assert.equal(transcriptCalls, 0);
+  assert.equal(job.transcript, undefined);
+  assert.equal(job.status, 'COMPLETED');
+});
+
+test('beide Ausgaben werden bei fehlendem Transkript als PARTIAL markiert', async () => {
+  const { job, manager } = createModeJob(createTempDataDir(), 'both');
+  const originals = {
+    getVideoInfo: youtubeService.getVideoInfo,
+    analyzeSegment: geminiService.analyzeSegment,
+    consolidateInventory: geminiService.consolidateInventory,
+    extractTranscript: geminiService.extractTranscript,
+  };
+  youtubeService.getVideoInfo = async () => ({ title: 'Teilweises Ergebnis', duration: 1, id: 'partial-output', canonical_url: 'https://www.youtube.com/watch?v=partial-output' });
+  geminiService.analyzeSegment = async () => [];
+  geminiService.consolidateInventory = async () => [];
+  geminiService.extractTranscript = async () => { throw new Error('Transkript nicht verfügbar'); };
+
+  try {
+    await processVideoJob(job, manager);
+  } finally {
+    youtubeService.getVideoInfo = originals.getVideoInfo;
+    geminiService.analyzeSegment = originals.analyzeSegment;
+    geminiService.consolidateInventory = originals.consolidateInventory;
+    geminiService.extractTranscript = originals.extractTranscript;
+  }
+
+  assert.equal(job.status, 'PARTIAL');
+  assert.equal(job.transcript, undefined);
+  assert.match(job.warnings[0], /Transkript-Extraktion/);
+});
