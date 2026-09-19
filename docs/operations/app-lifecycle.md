@@ -31,7 +31,7 @@ Der POST-Endpunkt verlangt einen lokalen Origin und den pro App-Start erzeugten 
 
 ### Docker
 
-Der Node-Prozess läuft durch den direkten Docker-Aufruf als Container-PID 1. Nach Job-Abbruch, Prozess- und Dateicleanup, Server-Schließung und einem normalen Exit mit Code `0` stoppt der Container. `docker-compose.yml` verwendet `restart: on-failure:5`: Ein fehlerhafter Exit darf bis zu fünfmal neu gestartet werden, ein kontrollierter Shutdown wird nicht automatisch neu gestartet. Der Host-Port ist standardmäßig nur an `127.0.0.1` gebunden.
+Der Node-Prozess läuft durch den direkten Docker-Aufruf als Container-PID 1. Nach Job-Abbruch, Prozess- und Dateicleanup, Server-Schließung und einem normalen Exit mit Code `0` stoppt der Container. `compose.yaml` verwendet `restart: on-failure:5`: Ein fehlerhafter Exit darf bis zu fünfmal neu gestartet werden, ein kontrollierter Shutdown wird nicht automatisch neu gestartet. Der Host-Port ist standardmäßig nur an `127.0.0.1` gebunden.
 
 ### Native Node-/EXE-Ausführung
 

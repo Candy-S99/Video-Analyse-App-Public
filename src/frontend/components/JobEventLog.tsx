@@ -32,8 +32,6 @@ const labels: Partial<Record<JobEvent['type'], string>> = {
   SCREENSHOT_FALLBACK: 'Screenshot-Fallback verwendet',
   SCREENSHOT_PARTIAL: 'Screenshot teilweise abgeschlossen',
   SCREENSHOT_FAILED: 'Screenshot fehlgeschlagen',
-  EXTERNAL_COPY_COMPLETED: 'Externe Kopie abgeschlossen',
-  EXTERNAL_COPY_FAILED: 'Externe Kopie fehlgeschlagen',
   RETENTION_PREVIEW: 'Aufbewahrungsvorschau erstellt',
   RETENTION_CLEANUP_COMPLETED: 'Aufbewahrung bereinigt',
 };

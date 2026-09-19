@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs';
 import type { JobManager } from './jobManager';
-import { JobResult, InventoryItem, ScreenshotCandidate, FailedSegment, ScreenshotMetadata } from '../../shared/types';
+import { JobResult, InventoryItem, ScreenshotCandidate, FailedSegment } from '../../shared/types';
 import { youtubeService } from './youtubeService';
 import { geminiService } from './geminiService';
 import { MediaSourceService } from './mediaSourceService';
@@ -279,7 +279,7 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
       const media = await new MediaSourceService({ dataDir: jobManager.getConfig().data_dir, processRegistry }).materialize({ jobId: job.job_id, title: job.video.title, sourceUrl: videoInfo.canonical_url, abortSignal });
       const extractor = new FrameExtractor({ processRegistry });
       const evaluator = new ScreenshotEvaluator({ generate: request => geminiService.evaluateScreenshotFrames({ prompt: request.prompt, frames: request.frames as Array<{ frame_id: string; png: Buffer }>, modelOverride: job.analysis.model, abortSignal, eventContext: createEventContext('SCREENSHOT_EVALUATION') }) });
-      const storage = new ScreenshotStorage({ dataDir: jobManager.getConfig().data_dir, externalOutputDir: jobManager.getExternalOutputDir(job.job_id) });
+      const storage = new ScreenshotStorage({ dataDir: jobManager.getConfig().data_dir });
       for (let index = 0; index < screenshotCandidates.length; index++) {
         const candidate = screenshotCandidates[index];
         const pipeline = new ScreenshotPipeline({
@@ -295,14 +295,6 @@ export async function processVideoJob(job: JobResult, jobManager: JobManager) {
           job.progress.fine_search_frames_examined += candidate.fine_search_frames?.length ?? 0;
           job.progress.screenshots_completed += candidate.screenshots?.length ?? 0;
           if (candidate.status === 'FAILED' || candidate.status === 'PARTIAL') job.progress.screenshots_failed++;
-          const externalStatuses = (candidate.screenshots || []).map(screenshot => (screenshot as ScreenshotMetadata & { external_storage?: { status?: string } }).external_storage?.status).filter(Boolean);
-          if (externalStatuses.includes('FAILED')) {
-            job.external_storage = { status: 'FAILED', warning: 'Mindestens eine externe Screenshot-Kopie ist fehlgeschlagen.' };
-            jobManager.getEventLogger().append({ job_id: job.job_id, type: 'EXTERNAL_COPY_FAILED', operation: 'EXTERNAL_COPY', provider: 'app', details: { candidate: index + 1 } });
-          } else if (externalStatuses.includes('COMPLETED')) {
-            job.external_storage = { status: 'COMPLETED' };
-            jobManager.getEventLogger().append({ job_id: job.job_id, type: 'EXTERNAL_COPY_COMPLETED', operation: 'EXTERNAL_COPY', provider: 'app', details: { candidate: index + 1 } });
-          }
           jobManager.getEventLogger().append({ job_id: job.job_id, type: 'SCREENSHOT_CANDIDATE_COMPLETED', operation: 'SCREENSHOT_STORAGE', provider: 'app', details: { candidate: index + 1, screenshots: candidate.screenshots?.length ?? 0, status: candidate.status || 'SKIPPED' } });
           jobManager.saveJob(job);
         } finally {

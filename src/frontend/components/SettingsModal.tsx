@@ -30,7 +30,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [maxScreenshots, setMaxScreenshots] = useState(config?.max_screenshots_per_candidate ?? 4);
   const [fallback, setFallback] = useState<'exact_timestamp' | 'skip'>(config?.fine_search_fallback ?? 'exact_timestamp');
   const [automaticCleanup, setAutomaticCleanup] = useState(config?.automatic_cleanup_enabled ?? true);
-  const [externalOutputDir, setExternalOutputDir] = useState(config?.external_output_dir ?? '');
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState('');
@@ -53,7 +52,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       setSegmentLength(config.segment_length_seconds || 60);
       setExtractTranscript(config.extract_transcript ?? true);
-      setFineWindow(config.fine_search_window_seconds ?? 2); setFineInterval(config.fine_search_interval_seconds ?? .5); setMaxScreenshots(config.max_screenshots_per_candidate ?? 4); setFallback(config.fine_search_fallback ?? 'exact_timestamp'); setAutomaticCleanup(config.automatic_cleanup_enabled ?? true); setExternalOutputDir(config.external_output_dir ?? '');
+      setFineWindow(config.fine_search_window_seconds ?? 2); setFineInterval(config.fine_search_interval_seconds ?? .5); setMaxScreenshots(config.max_screenshots_per_candidate ?? 4); setFallback(config.fine_search_fallback ?? 'exact_timestamp'); setAutomaticCleanup(config.automatic_cleanup_enabled ?? true);
       setApiKey('');
       setShowApiKey(false);
       setApiKeyMessage(config.gemini_api_key_configured ? 'API Key gespeichert.' : 'Kein API Key gespeichert.');
@@ -80,7 +79,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       model: finalModel,
       segment_length_seconds: segmentLength,
       extract_transcript: extractTranscript,
-      fine_search_window_seconds: fineWindow, fine_search_interval_seconds: fineInterval, max_screenshots_per_candidate: maxScreenshots, fine_search_fallback: fallback, automatic_cleanup_enabled: automaticCleanup, external_output_dir: externalOutputDir || undefined,
+      fine_search_window_seconds: fineWindow, fine_search_interval_seconds: fineInterval, max_screenshots_per_candidate: maxScreenshots, fine_search_fallback: fallback, automatic_cleanup_enabled: automaticCleanup,
     });
 
     setIsSaving(false);
@@ -259,7 +258,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <label className="text-xs font-semibold text-stone-700 dark:text-stone-300">Intervall (s)<input type="number" min="0.1" step="0.1" value={fineInterval} onChange={e => setFineInterval(Number(e.target.value))} className="mt-1 w-full px-2 py-1.5 rounded-lg border dark:bg-stone-800" /></label>
             <label className="text-xs font-semibold text-stone-700 dark:text-stone-300">Max. Bilder/Kandidat<select value={maxScreenshots} onChange={e => setMaxScreenshots(Number(e.target.value))} className="mt-1 w-full px-2 py-1.5 rounded-lg border dark:bg-stone-800">{[1,2,3,4].map(value => <option key={value} value={value}>{value}</option>)}</select></label>
             <label className="text-xs font-semibold text-stone-700 dark:text-stone-300">Fallback<select value={fallback} onChange={e => setFallback(e.target.value as 'exact_timestamp' | 'skip')} className="mt-1 w-full px-2 py-1.5 rounded-lg border dark:bg-stone-800"><option value="exact_timestamp">Exakter Zeitpunkt</option><option value="skip">Überspringen</option></select></label>
-            <label className="col-span-2 text-xs font-semibold text-stone-700 dark:text-stone-300">Externer Container-Mount<input placeholder="/mnt/external-output/..." value={externalOutputDir} onChange={e => setExternalOutputDir(e.target.value)} className="mt-1 w-full px-2 py-1.5 rounded-lg border dark:bg-stone-800 font-mono" /></label>
+            <p className="col-span-2 text-[11px] text-stone-500 dark:text-stone-400 rounded-lg bg-stone-50 dark:bg-stone-800/50 px-3 py-2">
+              Vollständige Analysejobs werden automatisch im Ordner „output“ neben dieser Installation gespeichert.
+            </p>
             <label className="col-span-2 flex items-center gap-2 text-xs text-stone-700 dark:text-stone-300"><input type="checkbox" checked={automaticCleanup} onChange={e => setAutomaticCleanup(e.target.checked)} />Automatische 60-Tage-Bereinigung aktivieren</label>
           </div>
 

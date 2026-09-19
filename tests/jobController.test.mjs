@@ -94,13 +94,12 @@ test('POST /jobs verweigert neue Analysen ohne API-Key verständlich', () => {
   });
 });
 
-test('PUT /config akzeptiert alle sechs Screenshot-Felder und gibt die aktualisierte Konfiguration zurück', () => {
+test('PUT /config akzeptiert die Screenshot-Konfiguration ohne externen Output', () => {
   const manager = createManager();
   const controller = createJobController(manager);
   const response = createResponseRecorder();
 
   controller.updateConfig(createRequest({
-    external_output_dir: '/mnt/external-output/screenshots',
     fine_search_window_seconds: 8,
     fine_search_interval_seconds: 1,
     max_screenshots_per_candidate: 2,
@@ -109,7 +108,7 @@ test('PUT /config akzeptiert alle sechs Screenshot-Felder und gibt die aktualisi
   }), response);
 
   assert.equal(response.statusCode, 200);
-  assert.equal(response.body.external_output_dir, '/mnt/external-output/screenshots');
+  assert.equal('external_output_dir' in response.body, false);
   assert.equal(response.body.fine_search_window_seconds, 8);
   assert.equal(response.body.fine_search_interval_seconds, 1);
   assert.equal(response.body.max_screenshots_per_candidate, 2);
@@ -128,18 +127,18 @@ test('PUT /config akzeptiert eine Segmentlänge von 15 Sekunden unverändert', (
   assert.equal(response.body.segment_length_seconds, 15);
 });
 
-test('PUT /config antwortet bei ungültigem externem Pfad mit strukturiertem HTTP 400', () => {
+test('PUT /config lehnt den entfernten externen Output mit strukturiertem HTTP 400 ab', () => {
   const manager = createManager();
   const controller = createJobController(manager);
   const response = createResponseRecorder();
 
-  controller.updateConfig(createRequest({ external_output_dir: '/var/lib/host-output' }), response);
+  controller.updateConfig(createRequest({ external_output_dir: '/mnt/external-output' }), response);
 
   assert.equal(response.statusCode, 400);
   assert.deepEqual(response.body.error, {
     code: 'INVALID_CONFIGURATION',
     field: 'external_output_dir',
-    message: 'external_output_dir must be an absolute path inside /mnt/external-output',
+    message: 'external_output_dir is not configurable',
   });
 });
 
@@ -161,7 +160,7 @@ test('PUT /config validiert alle bekannten Werte strikt ohne Coercion oder still
     ['model', 42],
     ['segment_length_seconds', '60'],
     ['extract_transcript', 'false'],
-    ['external_output_dir', null],
+    ['external_output_dir', '/mnt/external-output'],
     ['fine_search_window_seconds', '2'],
     ['fine_search_interval_seconds', false],
     ['max_screenshots_per_candidate', '2'],
@@ -199,11 +198,11 @@ test('PUT /config lehnt null, Arrays und primitive JSON-Bodies ab, akzeptiert ab
   }
 });
 
-test('GET /jobs/:job_id gibt Phase, vollständigen Fortschritt und externen Speicher zurück', () => {
+test('GET /jobs/:job_id gibt Phase und vollständigen Fortschritt ohne externen Speicher zurück', () => {
   const manager = createManager();
   const controller = createJobController(manager);
   const job = {
-    schema_version: '2.0',
+    schema_version: '3.0',
     job_id: '00000000-0000-4000-8000-000000000002',
     correlation_id: '00000000-0000-4000-8000-000000000002',
     status: 'PROCESSING',
@@ -216,11 +215,6 @@ test('GET /jobs/:job_id gibt Phase, vollständigen Fortschritt und externen Spei
       screenshots_completed: 6,
       screenshots_failed: 1,
       fine_search_frames_examined: 12,
-    },
-    external_storage: {
-      status: 'COMPLETED',
-      relative_path: 'screenshots/00000000-0000-4000-8000-000000000002',
-      copied_at: '2026-09-13T12:00:00.000Z',
     },
     config_snapshot: {
       model: 'gemini-3.8-flash',
@@ -262,6 +256,6 @@ test('GET /jobs/:job_id gibt Phase, vollständigen Fortschritt und externen Spei
     segments_successful: job.analysis.segments_successful,
     segments_failed: job.analysis.segments_failed,
   });
-  assert.deepEqual(response.body.external_storage, job.external_storage);
+  assert.equal('external_storage' in response.body, false);
   assert.equal(typeof response.body.updated_at, 'string');
 });
