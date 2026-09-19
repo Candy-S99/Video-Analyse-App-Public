@@ -9,7 +9,7 @@ Lokale Videoanalyse-App für öffentliche YouTube-Videos. Diese öffentliche Var
 - Internetzugriff für den ersten Image-Pull, Gemini und öffentliche YouTube-Quellen.
 - Node.js, npm, Python und ffmpeg müssen auf dem Host nicht installiert werden. Diese Laufzeitbestandteile befinden sich im Container.
 
-## Schnellstart mit öffentlichem Docker-Image
+## Schnellstart mit Docker-Image
 
 ```powershell
 git clone "https://github.com/Candy-S99/Video-Analyse-App-Public.git"
