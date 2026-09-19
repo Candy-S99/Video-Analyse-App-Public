@@ -19,8 +19,28 @@ JOBS = [
         "created_at": "2026-09-13T18:11:42.000Z",
         "token_usage": {"prompt_tokens": 120, "candidate_tokens": 25, "total_tokens": 145, "reported_requests": 1},
         "cost_estimate": {"input_usd": 0.003, "output_usd": 0.0012, "estimated_usd": 0.0042, "priced_requests": 1, "currency": "USD"},
-    }
+    },
+    {
+        "job_id": "job-2",
+        "status": "COMPLETED",
+        "url": "https://www.youtube.com/watch?v=finished-output",
+        "title": "Fertiges Ergebnis",
+        "created_at": "2026-09-13T18:12:42.000Z",
+        "token_usage": {"prompt_tokens": 10, "candidate_tokens": 5, "total_tokens": 15, "reported_requests": 1},
+        "cost_estimate": {"input_usd": 0.001, "output_usd": 0.0002, "estimated_usd": 0.0012, "priced_requests": 1, "currency": "USD"},
+    },
 ]
+
+OUTPUT_LISTING = {
+    "job_id": "job-2",
+    "output_directory": "output/job-2--fertiges-ergebnis",
+    "artifacts": [
+        {"relative_path": "manifest.json", "file_name": "manifest.json", "size_bytes": 24, "mime_type": "application/json", "preview_kind": "text"},
+        {"relative_path": "02-transcript/transcript.txt", "file_name": "transcript.txt", "size_bytes": 17, "mime_type": "text/plain", "preview_kind": "text"},
+        {"relative_path": "06-screenshots/scene-001.png", "file_name": "scene-001.png", "size_bytes": 4, "mime_type": "image/png", "preview_kind": "image"},
+        {"relative_path": "03-video/video.mp4", "file_name": "video.mp4", "size_bytes": 1024, "mime_type": "video/mp4", "preview_kind": "none"},
+    ],
+}
 
 JOB_RESULT = {
     "schema_version": "1.0",
@@ -70,9 +90,10 @@ with sync_playwright() as playwright:
     request_state = {"reject_next_transcript_update": False}
     logs_cleared = False
     global_event_gets = 0
+    output_gets = 0
 
     def handle_route(route):
-        global logs_cleared, global_event_gets
+        global logs_cleared, global_event_gets, output_gets
         request = route.request
         if request.method == "GET" and request.url.endswith("/config"):
             fulfill_json(route, CONFIG)
@@ -93,6 +114,11 @@ with sync_playwright() as playwright:
             fulfill_json(route, JOBS)
         elif request.method == "GET" and request.url.endswith("/jobs/job-1/result"):
             fulfill_json(route, JOB_RESULT)
+        elif request.method == "GET" and request.url.endswith("/jobs/job-2/output"):
+            output_gets += 1
+            fulfill_json(route, OUTPUT_LISTING)
+        elif request.method == "GET" and request.url.startswith("http://127.0.0.1:3000/api/v1/video-analysis/jobs/job-2/output/file"):
+            route.fulfill(status=200, content_type="application/json", body='{"status":"COMPLETED"}\n')
         elif request.method == "GET" and request.url.endswith("/jobs/job-1/events"):
             fulfill_json(route, EVENTS)
         elif request.method == "GET" and request.url.endswith("/jobs/events"):
@@ -160,6 +186,20 @@ with sync_playwright() as playwright:
     page.locator("#settings-open-btn").click()
     assert page.locator("#settings-segment-option-15").is_visible()
     page.locator("#settings-close-button").click()
+
+    assert page.locator("#open-output-job-1").is_disabled()
+    assert page.locator("#open-output-job-2").is_enabled()
+    page.locator("#open-output-job-2").click()
+    page.wait_for_timeout(100)
+    assert output_gets == 1
+    assert page.locator("#output-artifacts-dialog").is_visible()
+    assert "manifest.json" in page.locator("#output-artifact-row-job-2-0").inner_text()
+    page.locator("#output-artifact-row-job-2-0").click()
+    page.wait_for_timeout(100)
+    assert "COMPLETED" in page.locator("#output-preview-job-2").inner_text()
+    page.locator("#output-close-button").click()
+    page.locator("#open-output-menu-job-2").click()
+    assert page.locator("#open-output-explorer-job-2").get_attribute("href") == "video-analysis-output:job/job-2"
 
     assert page.locator("#open-youtube-job-1").get_attribute("target") == "_blank"
     assert page.locator("#open-youtube-job-1").get_attribute("href") == JOBS[0]["url"]

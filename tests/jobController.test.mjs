@@ -23,6 +23,18 @@ function createResponseRecorder() {
       this.body = body;
       return this;
     },
+    attachment(fileName) {
+      this.attachmentName = fileName;
+      return this;
+    },
+    type(contentType) {
+      this.contentType = contentType;
+      return this;
+    },
+    sendFile(filePath) {
+      this.filePath = filePath;
+      return this;
+    },
   };
 }
 
@@ -32,6 +44,51 @@ function createRequest(body = {}, params = {}) {
 
 function createManager() {
   return new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
+}
+
+function createOutputJob(status = 'COMPLETED') {
+  return {
+    schema_version: '1.0',
+    job_id: '00000000-0000-4000-8000-000000000123',
+    correlation_id: '00000000-0000-4000-8000-000000000123',
+    status,
+    phase: status === 'PROCESSING' ? 'ANALYSIS' : 'FINALIZING',
+    progress: {
+      segments_completed: 0,
+      segments_total: 0,
+      candidates_completed: 0,
+      candidates_total: 0,
+      screenshots_completed: 0,
+      screenshots_failed: 0,
+      fine_search_frames_examined: 0,
+    },
+    external_storage: { status: 'NOT_CONFIGURED' },
+    config_snapshot: {
+      model: 'gemini-3.8-flash',
+      segment_length_seconds: 60,
+      extract_transcript: true,
+      fine_search_window_seconds: 2,
+      fine_search_interval_seconds: 0.5,
+      max_screenshots_per_candidate: 4,
+      fine_search_fallback: 'exact_timestamp',
+      automatic_cleanup_enabled: true,
+    },
+    source: { type: 'youtube', url: 'https://www.youtube.com/watch?v=output' },
+    video: { title: 'Demo Video' },
+    analysis: {
+      model: 'gemini-3.8-flash',
+      processing_mode: 'static_segments',
+      segment_duration_seconds: 60,
+      segments_total: 0,
+      segments_successful: 0,
+      segments_failed: 0,
+    },
+    inventory: [],
+    screenshot_candidates: [],
+    warnings: [],
+    errors: [],
+    created_at: '2026-09-19T10:00:00.000Z',
+  };
 }
 
 function createSecretManager() {
@@ -92,6 +149,53 @@ test('POST /jobs verweigert neue Analysen ohne API-Key verständlich', () => {
     code: 'GEMINI_API_KEY_REQUIRED',
     message: 'Für die Videoanalyse wird ein Gemini API Key benötigt. Bitte hinterlege ihn unter Einstellungen.',
   });
+});
+
+test('Output-Liste ist nur für terminale Jobs verfügbar und enthält keine absoluten Pfade', () => {
+  const manager = createManager();
+  const controller = createJobController(manager);
+  const job = createOutputJob();
+  manager.saveJob(job);
+
+  const completedResponse = createResponseRecorder();
+  controller.getJobOutput(createRequest({}, { job_id: job.job_id }), completedResponse);
+
+  assert.equal(completedResponse.statusCode, 200);
+  assert.equal(completedResponse.body.job_id, job.job_id);
+  assert.equal(completedResponse.body.output_directory, 'output/00000000-0000-4000-8000-000000000123--demo-video');
+  assert.equal(completedResponse.body.artifacts.some(artifact => path.isAbsolute(artifact.relative_path)), false);
+  assert.equal(completedResponse.body.artifacts.some(artifact => artifact.relative_path === 'manifest.json'), true);
+
+  job.status = 'PROCESSING';
+  manager.saveJob(job);
+  const activeResponse = createResponseRecorder();
+  controller.getJobOutput(createRequest({}, { job_id: job.job_id }), activeResponse);
+
+  assert.equal(activeResponse.statusCode, 409);
+  assert.equal(activeResponse.body.error.code, 'OUTPUT_NOT_READY');
+});
+
+test('Output-Datei wird sicher inline oder als Download ausgeliefert', () => {
+  const manager = createManager();
+  const controller = createJobController(manager);
+  const job = createOutputJob();
+  manager.saveJob(job);
+
+  const inlineResponse = createResponseRecorder();
+  controller.getOutputArtifact({ params: { job_id: job.job_id }, query: { path: 'manifest.json' } }, inlineResponse);
+  assert.equal(inlineResponse.statusCode, 200);
+  assert.equal(inlineResponse.contentType, 'application/json');
+  assert.equal(inlineResponse.filePath.endsWith(`${path.sep}manifest.json`), true);
+
+  const downloadResponse = createResponseRecorder();
+  controller.getOutputArtifact({ params: { job_id: job.job_id }, query: { path: 'manifest.json', download: 'true' } }, downloadResponse);
+  assert.equal(downloadResponse.statusCode, 200);
+  assert.equal(downloadResponse.attachmentName, 'manifest.json');
+
+  const invalidResponse = createResponseRecorder();
+  controller.getOutputArtifact({ params: { job_id: job.job_id }, query: { path: '../manifest.json' } }, invalidResponse);
+  assert.equal(invalidResponse.statusCode, 400);
+  assert.equal(invalidResponse.body.error.code, 'INVALID_OUTPUT_PATH');
 });
 
 test('PUT /config akzeptiert die Screenshot-Konfiguration ohne externen Output', () => {

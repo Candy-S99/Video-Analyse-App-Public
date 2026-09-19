@@ -249,3 +249,19 @@ export interface JobResult {
   completed_at?: string;
   failed_segments?: FailedSegment[];
 }
+
+export type OutputArtifactPreviewKind = 'image' | 'text' | 'none';
+
+export interface JobOutputArtifact {
+  relative_path: string;
+  file_name: string;
+  size_bytes: number;
+  mime_type: string;
+  preview_kind: OutputArtifactPreviewKind;
+}
+
+export interface JobOutputListing {
+  job_id: string;
+  output_directory: string;
+  artifacts: JobOutputArtifact[];
+}

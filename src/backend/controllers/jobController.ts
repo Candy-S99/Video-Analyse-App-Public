@@ -4,8 +4,25 @@ import fs from 'fs';
 import path from 'path';
 import { RetentionService } from '../services/retentionService';
 import { safeErrorMessage } from '../services/secretRedactor';
+import {
+  OutputArtifactNotFoundError,
+  OutputArtifactPathError,
+  OutputArtifactService,
+  OutputDirectoryNotFoundError,
+} from '../services/outputArtifactService';
 
 const safeControllerError = (manager: JobManager, error: unknown): string => safeErrorMessage(error, [manager.getSecretStore().getGeminiApiKey() || '']);
+const outputNotReady = (res: Response) => res.status(409).json({ error: { code: 'OUTPUT_NOT_READY', message: 'Der Output-Ordner ist erst nach Abschluss der Analyse verfügbar.' } });
+
+const outputErrorResponse = (res: Response, error: unknown) => {
+  if (error instanceof OutputArtifactPathError) {
+    return res.status(400).json({ error: { code: error.code, message: error.message } });
+  }
+  if (error instanceof OutputArtifactNotFoundError || error instanceof OutputDirectoryNotFoundError) {
+    return res.status(404).json({ error: { code: error.code, message: error.message } });
+  }
+  return res.status(500).json({ error: 'Output konnte nicht gelesen werden' });
+};
 
 const createJobFor = (manager: JobManager) => (req: Request, res: Response) => {
   const { source_url, correlation_id } = req.body;
@@ -68,6 +85,37 @@ const getJobStatusFor = (manager: JobManager) => (req: Request, res: Response) =
     },
     updated_at: new Date().toISOString()
   });
+};
+
+const getJobOutputFor = (manager: JobManager) => (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  try {
+    return res.status(200).json(new OutputArtifactService({ dataDir: manager.getConfig().data_dir }).list(job));
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
+};
+
+const getOutputArtifactFor = (manager: JobManager) => (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  const relativePath = typeof req.query.path === 'string' ? req.query.path : '';
+  const download = req.query.download === 'true';
+  try {
+    const artifact = new OutputArtifactService({ dataDir: manager.getConfig().data_dir }).resolve(job, relativePath);
+    if (download) res.attachment(artifact.file_name);
+    else res.type(artifact.mime_type);
+    return res.sendFile(artifact.absolute_path);
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
 };
 
 export const getJobResult = (req: Request, res: Response) => {
@@ -141,6 +189,8 @@ const updateConfigFor = (manager: JobManager) => (req: Request, res: Response) =
 export const createJobController = (manager: JobManager = jobManager) => ({
   createJob: createJobFor(manager),
   getJobStatus: getJobStatusFor(manager),
+  getJobOutput: getJobOutputFor(manager),
+  getOutputArtifact: getOutputArtifactFor(manager),
   getConfig: getConfigFor(manager),
   updateConfig: updateConfigFor(manager),
   updateGeminiApiKey: updateGeminiApiKeyFor(manager),
@@ -148,6 +198,8 @@ export const createJobController = (manager: JobManager = jobManager) => ({
 });
 
 export const getJobStatus = getJobStatusFor(jobManager);
+export const getJobOutput = getJobOutputFor(jobManager);
+export const getOutputArtifact = getOutputArtifactFor(jobManager);
 export const updateConfig = updateConfigFor(jobManager);
 export const updateGeminiApiKey = updateGeminiApiKeyFor(jobManager);
 export const deleteGeminiApiKey = deleteGeminiApiKeyFor(jobManager);

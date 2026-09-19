@@ -16,19 +16,22 @@ import {
   Check,
   RefreshCw,
   ExternalLink,
+  FolderOpen,
+  ChevronDown,
   Layers,
   Trash2,
   XCircle,
   Maximize2,
   Power
 } from 'lucide-react';
-import { JobResult, JobStatus, AppConfig, JobEventsResponse } from '../shared/types';
+import { JobResult, JobStatus, AppConfig, JobEventsResponse, JobOutputArtifact, JobOutputListing } from '../shared/types';
 import { SettingsModal } from './components/SettingsModal';
 import { TranscriptView } from './components/TranscriptView';
 import { ScreenshotCandidatesView } from './components/ScreenshotCandidatesView';
 import { JobEventLog } from './components/JobEventLog';
 import { DetailFullscreenDialog } from './components/DetailFullscreenDialog';
 import { QuickConfigDialog, type QuickConfigPanel } from './components/QuickConfigDialog';
+import { OutputArtifactsDialog } from './components/OutputArtifactsDialog';
 
 async function safeFetchJson<T = any>(url: string, options?: RequestInit): Promise<{ ok: boolean; data?: T; error?: string }> {
   try {
@@ -76,6 +79,12 @@ function formatEstimatedCost(cost?: { estimated_usd?: number; priced_requests?: 
   }).format(cost.estimated_usd);
 }
 
+const TERMINAL_JOB_STATUSES: JobStatus[] = ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED'];
+
+function isTerminalJobStatus(status: unknown): status is JobStatus {
+  return typeof status === 'string' && TERMINAL_JOB_STATUSES.includes(status as JobStatus);
+}
+
 export default function App() {
   const [url, setUrl] = useState('');
   const [jobs, setJobs] = useState<any[]>([]);
@@ -103,6 +112,14 @@ export default function App() {
   const [shutdownState, setShutdownState] = useState<'RUNNING' | 'SHUTTING_DOWN' | 'STOPPED'>('RUNNING');
   const [shutdownActiveJobs, setShutdownActiveJobs] = useState(0);
   const [isShutdownDialogOpen, setIsShutdownDialogOpen] = useState(false);
+  const [openOutputJobId, setOpenOutputJobId] = useState<string | null>(null);
+  const [openOutputMenuJobId, setOpenOutputMenuJobId] = useState<string | null>(null);
+  const [outputListing, setOutputListing] = useState<JobOutputListing | null>(null);
+  const [outputLoading, setOutputLoading] = useState(false);
+  const [outputError, setOutputError] = useState('');
+  const [selectedOutputArtifact, setSelectedOutputArtifact] = useState<JobOutputArtifact | null>(null);
+  const [outputPreviewText, setOutputPreviewText] = useState('');
+  const [outputPreviewLoading, setOutputPreviewLoading] = useState(false);
   
   // Theme Management (Dark Mode)
   const [isDark, setIsDark] = useState<boolean>(() => {
@@ -210,6 +227,61 @@ export default function App() {
     if (res.ok && res.data) {
       setJobs(res.data);
     }
+  };
+
+  const outputArtifactUrl = (jobId: string, relativePath: string, download = false) => {
+    const query = new URLSearchParams({ path: relativePath });
+    if (download) query.set('download', 'true');
+    return `/api/v1/video-analysis/jobs/${encodeURIComponent(jobId)}/output/file?${query.toString()}`;
+  };
+
+  const handleOpenOutput = async (job: { job_id: string; status: JobStatus; title?: string }) => {
+    if (!isTerminalJobStatus(job.status)) return;
+    setOpenOutputMenuJobId(null);
+    setOpenOutputJobId(job.job_id);
+    setOutputListing(null);
+    setSelectedOutputArtifact(null);
+    setOutputPreviewText('');
+    setOutputPreviewLoading(false);
+    setOutputError('');
+    setOutputLoading(true);
+    const res = await safeFetchJson<JobOutputListing>(`/api/v1/video-analysis/jobs/${encodeURIComponent(job.job_id)}/output`);
+    if (res.ok && res.data) {
+      setOutputListing(res.data);
+    } else {
+      setOutputError(res.error || 'Output konnte nicht geladen werden');
+    }
+    setOutputLoading(false);
+  };
+
+  const handleSelectOutputArtifact = async (artifact: JobOutputArtifact) => {
+    if (!openOutputJobId) return;
+    setSelectedOutputArtifact(artifact);
+    setOutputPreviewText('');
+    if (artifact.preview_kind !== 'text') {
+      setOutputPreviewLoading(false);
+      return;
+    }
+    setOutputPreviewLoading(true);
+    try {
+      const response = await fetch(outputArtifactUrl(openOutputJobId, artifact.relative_path));
+      if (!response.ok) throw new Error(`Server antwortete mit Status ${response.status}`);
+      setOutputPreviewText(await response.text());
+    } catch (err: any) {
+      setOutputPreviewText(`Vorschau konnte nicht geladen werden: ${err?.message || 'Unbekannter Fehler'}`);
+    } finally {
+      setOutputPreviewLoading(false);
+    }
+  };
+
+  const closeOutputDialog = () => {
+    setOpenOutputJobId(null);
+    setOpenOutputMenuJobId(null);
+    setOutputListing(null);
+    setSelectedOutputArtifact(null);
+    setOutputPreviewText('');
+    setOutputPreviewLoading(false);
+    setOutputError('');
   };
 
   useEffect(() => {
@@ -677,6 +749,55 @@ export default function App() {
                       </div>
                     </button>
                     <div className="flex items-center gap-1 pr-2">
+                      <div className="relative flex items-center">
+                        <button
+                          id={`open-output-${job.job_id}`}
+                          type="button"
+                          onClick={() => void handleOpenOutput(job)}
+                          disabled={!isTerminalJobStatus(job.status)}
+                          title={isTerminalJobStatus(job.status) ? 'Output-Artefakte im Browser ansehen' : 'Output steht erst nach Abschluss der Analyse zur Verfügung'}
+                          aria-label={`Output von ${job.title || job.job_id} öffnen`}
+                          className="px-2.5 py-2 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-l-lg border border-indigo-200 dark:border-indigo-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5 text-xs font-semibold"
+                        >
+                          <FolderOpen className="w-4 h-4" />
+                          <span className="hidden xl:inline">Output</span>
+                        </button>
+                        <button
+                          id={`open-output-menu-${job.job_id}`}
+                          type="button"
+                          onClick={() => setOpenOutputMenuJobId(current => current === job.job_id ? null : job.job_id)}
+                          disabled={!isTerminalJobStatus(job.status)}
+                          aria-haspopup="menu"
+                          aria-expanded={openOutputMenuJobId === job.job_id}
+                          aria-label="Weitere Output-Optionen"
+                          title="Weitere Output-Optionen"
+                          className="px-1.5 py-2 text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-r-lg border-y border-r border-indigo-200 dark:border-indigo-800/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        >
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                        {openOutputMenuJobId === job.job_id && isTerminalJobStatus(job.status) && (
+                          <div role="menu" className="absolute right-0 top-full z-20 mt-1 min-w-[190px] rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900 p-1 shadow-xl">
+                            <a
+                              id={`open-output-explorer-${job.job_id}`}
+                              role="menuitem"
+                              href={`video-analysis-output:job/${encodeURIComponent(job.job_id)}`}
+                              onClick={() => setOpenOutputMenuJobId(null)}
+                              className="block rounded-lg px-3 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800"
+                            >
+                              Im Explorer öffnen
+                            </a>
+                            <button
+                              id={`open-output-browser-${job.job_id}`}
+                              role="menuitem"
+                              type="button"
+                              onClick={() => void handleOpenOutput(job)}
+                              className="w-full text-left rounded-lg px-3 py-2 text-xs text-stone-700 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-800"
+                            >
+                              Im Browser ansehen
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <div
                         id={`token-usage-${job.job_id}`}
                         aria-label={`Token gesamt: ${job.token_usage?.total_tokens ? Number(job.token_usage.total_tokens).toLocaleString('de-DE') : 'nicht gemeldet'}`}
@@ -852,6 +973,21 @@ export default function App() {
           onOpenFullscreen={() => { setFullscreenEventScope('global'); setFullscreenView('events'); }}
         />
       </div>
+
+      <OutputArtifactsDialog
+        isOpen={openOutputJobId !== null}
+        jobId={openOutputJobId || ''}
+        jobTitle={jobs.find(job => job.job_id === openOutputJobId)?.title}
+        listing={outputListing}
+        loading={outputLoading}
+        error={outputError}
+        selectedArtifact={selectedOutputArtifact}
+        previewText={outputPreviewText}
+        previewLoading={outputPreviewLoading}
+        artifactUrl={(relativePath, download = false) => outputArtifactUrl(openOutputJobId || '', relativePath, download)}
+        onClose={closeOutputDialog}
+        onSelectArtifact={artifact => void handleSelectOutputArtifact(artifact)}
+      />
 
       <DetailFullscreenDialog
         isOpen={fullscreenView !== null}
