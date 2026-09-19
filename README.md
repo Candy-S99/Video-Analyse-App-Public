@@ -54,7 +54,7 @@ Node.js, npm, Python und ffmpeg müssen auf dem Host nicht installiert werden.
 
 ## Start, Stop und Update
 
-Im Release-ZIP stehen folgende Skripte zur Verfügung:
+Im Release-ZIP stehen folgende Skripte zur Verfügung: (Scripte cmd müssen ggf. per Adminrechte ausgeführt werden falls die normale Ausführung nicht erlaubt wird)
 
 - `Start.cmd`: Image laden, Container starten und Browser öffnen.
 - `Stop.cmd`: Container stoppen; Daten bleiben erhalten.
