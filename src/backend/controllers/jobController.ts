@@ -10,12 +10,16 @@ import {
   OutputArtifactService,
   OutputDirectoryNotFoundError,
 } from '../services/outputArtifactService';
+import { OutputArchiveRequestError, OutputArchiveService } from '../services/outputArchiveService';
 
 const safeControllerError = (manager: JobManager, error: unknown): string => safeErrorMessage(error, [manager.getSecretStore().getGeminiApiKey() || '']);
 const outputNotReady = (res: Response) => res.status(409).json({ error: { code: 'OUTPUT_NOT_READY', message: 'Der Output-Ordner ist erst nach Abschluss der Analyse verfügbar.' } });
 
 const outputErrorResponse = (res: Response, error: unknown) => {
   if (error instanceof OutputArtifactPathError) {
+    return res.status(400).json({ error: { code: error.code, message: error.message } });
+  }
+  if (error instanceof OutputArchiveRequestError) {
     return res.status(400).json({ error: { code: error.code, message: error.message } });
   }
   if (error instanceof OutputArtifactNotFoundError || error instanceof OutputDirectoryNotFoundError) {
@@ -118,6 +122,29 @@ const getOutputArtifactFor = (manager: JobManager) => (req: Request, res: Respon
   }
 };
 
+const createJobOutputArchiveFor = (manager: JobManager) => async (req: Request, res: Response) => {
+  const jobId = req.params.job_id as string;
+  const job = manager.getJob(jobId);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  if (job.status === 'QUEUED' || job.status === 'PROCESSING') return outputNotReady(res);
+
+  const archiveService = new OutputArchiveService({ dataDir: manager.getConfig().data_dir });
+  let artifacts;
+  try {
+    artifacts = archiveService.resolve(job, req.body?.paths);
+  } catch (error) {
+    return outputErrorResponse(res, error);
+  }
+
+  res.status(200).type('application/zip').attachment(`${jobId}-output.zip`);
+  try {
+    await archiveService.stream(artifacts, res);
+  } catch (error) {
+    if (!res.headersSent) return outputErrorResponse(res, error);
+    res.destroy(error instanceof Error ? error : new Error('Output-Archiv konnte nicht erstellt werden'));
+  }
+};
+
 export const getJobResult = (req: Request, res: Response) => {
   const job_id = req.params.job_id as string;
   const job = jobManager.getJob(job_id);
@@ -161,6 +188,7 @@ const updateGeminiApiKeyFor = (manager: JobManager) => (req: Request, res: Respo
 };
 
 export const createJob = createJobFor(jobManager);
+export const createJobOutputArchive = createJobOutputArchiveFor(jobManager);
 
 const deleteGeminiApiKeyFor = (manager: JobManager) => (_req: Request, res: Response) => {
   manager.deleteGeminiApiKey();
@@ -188,6 +216,7 @@ const updateConfigFor = (manager: JobManager) => (req: Request, res: Response) =
 
 export const createJobController = (manager: JobManager = jobManager) => ({
   createJob: createJobFor(manager),
+  createJobOutputArchive: createJobOutputArchiveFor(manager),
   getJobStatus: getJobStatusFor(manager),
   getJobOutput: getJobOutputFor(manager),
   getOutputArtifact: getOutputArtifactFor(manager),

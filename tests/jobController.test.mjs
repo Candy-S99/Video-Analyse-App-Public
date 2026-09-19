@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { PassThrough } from 'node:stream';
+import { inflateRawSync } from 'node:zlib';
 import { createJobController } from '../src/backend/controllers/jobController.ts';
 import { JobManager } from '../src/backend/services/jobManager.ts';
 import { SecretStore } from '../src/backend/services/secretStore.ts';
@@ -44,6 +46,41 @@ function createRequest(body = {}, params = {}) {
 
 function createManager() {
   return new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
+}
+
+function readZipEntries(zip) {
+  const endSignature = 0x06054b50;
+  let endOffset = -1;
+  for (let offset = zip.length - 22; offset >= 0; offset -= 1) {
+    if (zip.readUInt32LE(offset) === endSignature) {
+      endOffset = offset;
+      break;
+    }
+  }
+  assert.notEqual(endOffset, -1, 'ZIP-Endverzeichnis fehlt');
+
+  const entryCount = zip.readUInt16LE(endOffset + 10);
+  let centralOffset = zip.readUInt32LE(endOffset + 16);
+  const entries = [];
+  for (let index = 0; index < entryCount; index += 1) {
+    assert.equal(zip.readUInt32LE(centralOffset), 0x02014b50, 'Ungültiger ZIP-Zentraleintrag');
+    const compression = zip.readUInt16LE(centralOffset + 10);
+    const compressedSize = zip.readUInt32LE(centralOffset + 20);
+    const nameLength = zip.readUInt16LE(centralOffset + 28);
+    const extraLength = zip.readUInt16LE(centralOffset + 30);
+    const commentLength = zip.readUInt16LE(centralOffset + 32);
+    const localOffset = zip.readUInt32LE(centralOffset + 42);
+    const name = zip.subarray(centralOffset + 46, centralOffset + 46 + nameLength).toString('utf8');
+    assert.equal(zip.readUInt32LE(localOffset), 0x04034b50, 'Ungültiger ZIP-Lokaleintrag');
+    const localNameLength = zip.readUInt16LE(localOffset + 26);
+    const localExtraLength = zip.readUInt16LE(localOffset + 28);
+    const dataOffset = localOffset + 30 + localNameLength + localExtraLength;
+    const compressed = zip.subarray(dataOffset, dataOffset + compressedSize);
+    const content = compression === 0 ? compressed : inflateRawSync(compressed);
+    entries.push({ name, content });
+    centralOffset += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
 }
 
 function createOutputJob(status = 'COMPLETED') {
@@ -196,6 +233,85 @@ test('Output-Datei wird sicher inline oder als Download ausgeliefert', () => {
   controller.getOutputArtifact({ params: { job_id: job.job_id }, query: { path: '../manifest.json' } }, invalidResponse);
   assert.equal(invalidResponse.statusCode, 400);
   assert.equal(invalidResponse.body.error.code, 'INVALID_OUTPUT_PATH');
+});
+
+test('POST /jobs/:job_id/output/archive erzeugt ein ZIP mit deduplizierten sicheren Pfaden', async () => {
+  const manager = createManager();
+  const controller = createJobController(manager);
+  const job = createOutputJob();
+  manager.saveJob(job);
+  const outputRoot = path.dirname(manager.getManifestPath(job.job_id));
+  fs.mkdirSync(path.join(outputRoot, '02-transcript'), { recursive: true });
+  fs.writeFileSync(path.join(outputRoot, '02-transcript', 'transcript.txt'), 'Text');
+
+  const response = new PassThrough();
+  response.statusCode = 200;
+  response.status = function status(code) { this.statusCode = code; return this; };
+  response.type = function type(contentType) { this.contentType = contentType; return this; };
+  response.attachment = function attachment(fileName) { this.attachmentName = fileName; return this; };
+  const chunks = [];
+  response.on('data', chunk => chunks.push(chunk));
+  const archivePromise = new Promise((resolve, reject) => {
+    response.on('finish', resolve);
+    response.on('error', reject);
+  });
+
+  void controller.createJobOutputArchive({
+    params: { job_id: job.job_id },
+    body: { paths: ['manifest.json', './manifest.json', '02-transcript/transcript.txt', 'manifest.json'] },
+  }, response);
+  await archivePromise;
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.contentType, 'application/zip');
+  assert.equal(response.attachmentName, `${job.job_id}-output.zip`);
+  const zip = Buffer.concat(chunks);
+  const entries = readZipEntries(zip);
+  assert.deepEqual(entries.map(entry => entry.name).sort(), ['02-transcript/transcript.txt', 'manifest.json']);
+  const entriesByName = new Map(entries.map(entry => [entry.name, entry.content]));
+  assert.equal(entriesByName.get('manifest.json').equals(fs.readFileSync(path.join(outputRoot, 'manifest.json'))), true);
+  assert.equal(entriesByName.get('02-transcript/transcript.txt').toString('utf8'), 'Text');
+});
+
+test('POST /jobs/:job_id/output/archive lehnt aktive Jobs, fehlende Dateien und Traversal ab', async () => {
+  const manager = createManager();
+  const controller = createJobController(manager);
+  const job = createOutputJob();
+  manager.saveJob(job);
+
+  for (const paths of [['../manifest.json'], ['/etc/passwd']]) {
+    const response = createResponseRecorder();
+    void controller.createJobOutputArchive({ params: { job_id: job.job_id }, body: { paths } }, response);
+    assert.equal(response.statusCode, 400, paths.join(','));
+  }
+
+  for (const paths of [['missing.txt'], ['manifest.json', 'missing.txt']]) {
+    const response = createResponseRecorder();
+    void controller.createJobOutputArchive({ params: { job_id: job.job_id }, body: { paths } }, response);
+    assert.equal(response.statusCode, 404, paths.join(','));
+  }
+
+  const externalDirectory = createTempDataDir();
+  fs.writeFileSync(path.join(externalDirectory, 'secret.txt'), 'Nicht archivieren');
+  fs.symlinkSync(externalDirectory, path.join(path.dirname(manager.getManifestPath(job.job_id)), 'linked'), 'junction');
+  const symlinkResponse = createResponseRecorder();
+  void controller.createJobOutputArchive({ params: { job_id: job.job_id }, body: { paths: ['linked/secret.txt'] } }, symlinkResponse);
+  assert.equal(symlinkResponse.statusCode, 400);
+  assert.equal(symlinkResponse.body.error.code, 'INVALID_OUTPUT_PATH');
+
+  for (const body of [{}, { paths: [] }, { paths: ['manifest.json', 42] }]) {
+    const response = createResponseRecorder();
+    void controller.createJobOutputArchive({ params: { job_id: job.job_id }, body }, response);
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.body.error.code, 'INVALID_OUTPUT_ARCHIVE_REQUEST');
+  }
+
+  job.status = 'PROCESSING';
+  manager.saveJob(job);
+  const activeResponse = createResponseRecorder();
+  void controller.createJobOutputArchive({ params: { job_id: job.job_id }, body: { paths: ['manifest.json'] } }, activeResponse);
+  assert.equal(activeResponse.statusCode, 409);
+  assert.equal(activeResponse.body.error.code, 'OUTPUT_NOT_READY');
 });
 
 test('PUT /config akzeptiert die Screenshot-Konfiguration ohne externen Output', () => {
