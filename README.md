@@ -24,8 +24,6 @@ Die App hilft dabei, lange Videos nicht vollständig manuell durchsuchen zu müs
 
 ## Schnellstart per Release-ZIP
 
-Für normale Installationen ist kein Git und keine Shell-Navigation erforderlich:
-
 1. Docker Desktop installieren und starten.
 2. Das aktuelle ZIP aus den [GitHub Releases](https://github.com/Candy-S99/Video-Analyse-App-Public/releases) herunterladen.
 3. Das ZIP in einen eigenen Ordner entpacken.
