@@ -1,3 +1,5 @@
+name: video-analysis-app
+
 services:
   video-analysis-app:
     image: ghcr.io/candy-s99/video-analyse-app-public:${APP_IMAGE_TAG:-stable}
@@ -14,11 +16,14 @@ services:
     ports:
       - "127.0.0.1:${APP_PORT:-3006}:3000"
     volumes:
-      - ./data/jobs:/data/jobs
-      - ./external-output:/mnt/external-output
+      - video-analysis-data:/data/jobs
+      - ./output:/data/jobs/output
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
       interval: 30s
       timeout: 5s
       retries: 5
       start_period: 10s
+
+volumes:
+  video-analysis-data:

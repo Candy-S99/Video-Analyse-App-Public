@@ -66,7 +66,6 @@ const getJobStatusFor = (manager: JobManager) => (req: Request, res: Response) =
       segments_successful: segmentsSuccessful,
       segments_failed: segmentsFailed,
     },
-    external_storage: job.external_storage,
     updated_at: new Date().toISOString()
   });
 };

@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { JobResult, AppConfig, JobConfigSnapshot, JobPhase, ScreenshotProgress, ExternalStorageStatus } from '../../shared/types';
+import { JobResult, AppConfig, JobConfigSnapshot, JobPhase, ScreenshotProgress } from '../../shared/types';
 import { processVideoJob } from './videoProcessor';
 import { JobEventLogger } from './jobEventLogger';
 import { OutputArtifactWriter } from './outputArtifactWriter';
@@ -10,10 +10,10 @@ import { RetentionService } from './retentionService';
 import { SecretStore, secretStore as defaultSecretStore } from './secretStore';
 import { safeErrorMessage } from './secretRedactor';
 import { ProcessRegistry } from './processRegistry';
+import { ConfigStore, PersistedAppConfig } from './configStore';
 
 const DEFAULT_DATA_DIR = path.join(process.cwd(), 'data', 'jobs');
-const CURRENT_JOB_SCHEMA_VERSION = '2.0';
-const DEFAULT_EXTERNAL_MOUNT_ROOT = '/mnt/external-output';
+const CURRENT_JOB_SCHEMA_VERSION = '3.0';
 const DEFAULT_JOB_CONFIG_SNAPSHOT: JobConfigSnapshot = Object.freeze({
   model: 'gemini-3.8-flash',
   segment_length_seconds: 60,
@@ -49,7 +49,6 @@ const UPDATEABLE_CONFIG_FIELDS = [
   'model',
   'segment_length_seconds',
   'extract_transcript',
-  'external_output_dir',
   'fine_search_window_seconds',
   'fine_search_interval_seconds',
   'max_screenshots_per_candidate',
@@ -109,13 +108,13 @@ export class JobManager {
   private readonly artifactWriter: OutputArtifactWriter;
   private readonly secretStore: SecretStore;
   private readonly processRegistry: ProcessRegistry;
+  private readonly configStore: ConfigStore;
   private readonly activeJobs: Map<string, JobResult> = new Map();
   private readonly runningJobs = new Set<string>();
   private readonly abortControllers = new Map<string, AbortController>();
   private readonly cancellationRequested = new Set<string>();
   private readonly runningPromises = new Map<string, Promise<void>>();
   private readonly historyClearedJobs = new Set<string>();
-  private readonly externalOutputDirs = new Map<string, string | undefined>();
   private config: AppConfig;
   private shutdownRequested = false;
   private shutdownPromise: Promise<void> | null = null;
@@ -127,13 +126,14 @@ export class JobManager {
     this.processRegistry = options.processRegistry || new ProcessRegistry();
     fs.mkdirSync(this.dataDir, { recursive: true });
     this.canonicalDataDir = fs.realpathSync(this.dataDir);
+    this.configStore = new ConfigStore({ filePath: path.join(this.dataDir, '.video-analysis-config.json') });
     this.eventLogger = options.eventLogger || new JobEventLogger({
       dataDir: this.dataDir,
       getSecrets: () => [this.secretStore.getGeminiApiKey() || ''],
     });
     this.outputLayout = new OutputLayout({ dataDir: this.dataDir });
     this.artifactWriter = new OutputArtifactWriter({ dataDir: this.dataDir, layout: this.outputLayout });
-    this.config = {
+    const defaultConfig: AppConfig = {
       model: this.sanitizeModel(process.env.GEMINI_MODEL),
       segment_length_seconds: parseInt(process.env.SEGMENT_LENGTH || '60', 10),
       extract_transcript: process.env.EXTRACT_TRANSCRIPT !== 'false',
@@ -145,6 +145,7 @@ export class JobManager {
       fine_search_fallback: 'exact_timestamp',
       automatic_cleanup_enabled: true,
     };
+    this.config = this.applyPersistedConfig(defaultConfig, this.configStore.load());
     new RetentionService(this.dataDir).runStartupCleanup(this.config.automatic_cleanup_enabled);
     this.loadActiveJobs();
   }
@@ -216,10 +217,6 @@ export class JobManager {
     return safeErrorMessage(error, [this.secretStore.getGeminiApiKey() || '']);
   }
 
-  public getExternalOutputDir(jobId: string): string | undefined {
-    return this.externalOutputDirs.get(jobId) ?? this.config.external_output_dir;
-  }
-
   public updateConfig(newConfig: Partial<AppConfig>): AppConfig {
     if (!newConfig || typeof newConfig !== 'object' || Array.isArray(newConfig)) {
       throw new InvalidConfigError('configuration', 'configuration must be an object');
@@ -250,18 +247,6 @@ export class JobManager {
         throw new InvalidConfigError('extract_transcript', 'extract_transcript must be a boolean');
       }
       nextConfig.extract_transcript = newConfig.extract_transcript;
-    }
-    if (Object.prototype.hasOwnProperty.call(newConfig, 'external_output_dir')) {
-      if (newConfig.external_output_dir === undefined) {
-        nextConfig.external_output_dir = undefined;
-      } else if (this.isValidExternalOutputDir(newConfig.external_output_dir)) {
-        nextConfig.external_output_dir = newConfig.external_output_dir.trim();
-      } else {
-        throw new InvalidConfigError(
-          'external_output_dir',
-          'external_output_dir must be an absolute path inside /mnt/external-output',
-        );
-      }
     }
     if (Object.prototype.hasOwnProperty.call(newConfig, 'fine_search_window_seconds')) {
       if (!this.isPositiveFiniteNumber(newConfig.fine_search_window_seconds)) {
@@ -300,8 +285,45 @@ export class JobManager {
       nextConfig.automatic_cleanup_enabled = newConfig.automatic_cleanup_enabled;
     }
 
+    this.configStore.save(this.toPersistedConfig(nextConfig));
     this.config = nextConfig;
     return this.getConfig();
+  }
+
+  private toPersistedConfig(config: AppConfig): PersistedAppConfig {
+    return {
+      model: config.model,
+      segment_length_seconds: config.segment_length_seconds,
+      extract_transcript: config.extract_transcript,
+      fine_search_window_seconds: config.fine_search_window_seconds,
+      fine_search_interval_seconds: config.fine_search_interval_seconds,
+      max_screenshots_per_candidate: config.max_screenshots_per_candidate,
+      fine_search_fallback: config.fine_search_fallback,
+      automatic_cleanup_enabled: config.automatic_cleanup_enabled,
+    };
+  }
+
+  private applyPersistedConfig(config: AppConfig, persisted: Partial<PersistedAppConfig> | null): AppConfig {
+    if (!persisted) return config;
+    const nextConfig = { ...config };
+
+    if (this.isValidModel(persisted.model)) nextConfig.model = this.sanitizeModel(persisted.model);
+    if (this.isPositiveFiniteNumber(persisted.segment_length_seconds)) nextConfig.segment_length_seconds = persisted.segment_length_seconds;
+    if (typeof persisted.extract_transcript === 'boolean') nextConfig.extract_transcript = persisted.extract_transcript;
+    if (this.isPositiveFiniteNumber(persisted.fine_search_window_seconds)) nextConfig.fine_search_window_seconds = persisted.fine_search_window_seconds;
+    if (this.isPositiveFiniteNumber(persisted.fine_search_interval_seconds)) nextConfig.fine_search_interval_seconds = persisted.fine_search_interval_seconds;
+    if (Number.isInteger(persisted.max_screenshots_per_candidate) && persisted.max_screenshots_per_candidate >= 1 && persisted.max_screenshots_per_candidate <= 4) {
+      nextConfig.max_screenshots_per_candidate = persisted.max_screenshots_per_candidate;
+    }
+    if (persisted.fine_search_fallback === 'skip' || persisted.fine_search_fallback === 'exact_timestamp') {
+      nextConfig.fine_search_fallback = persisted.fine_search_fallback;
+    }
+    if (typeof persisted.automatic_cleanup_enabled === 'boolean') nextConfig.automatic_cleanup_enabled = persisted.automatic_cleanup_enabled;
+    if (nextConfig.fine_search_interval_seconds > nextConfig.fine_search_window_seconds) {
+      nextConfig.fine_search_window_seconds = config.fine_search_window_seconds;
+      nextConfig.fine_search_interval_seconds = config.fine_search_interval_seconds;
+    }
+    return nextConfig;
   }
 
   private isPositiveFiniteNumber(value: unknown): value is number {
@@ -312,23 +334,6 @@ export class JobManager {
     if (typeof value !== 'string') return false;
     const trimmed = value.trim().replace(/^models\//, '');
     return /^gemini-[a-zA-Z0-9.\-]+$/.test(trimmed);
-  }
-
-  private isValidExternalOutputDir(value: unknown): value is string {
-    if (typeof value !== 'string' || value.trim().length === 0 || /[\u0000-\u001F\u007F]/.test(value)) {
-      return false;
-    }
-
-    const candidate = value.trim();
-    if (candidate.includes('\\') || /^[A-Za-z]:[\\/]/.test(candidate) || candidate.startsWith('\\\\')) {
-      return false;
-    }
-    if (!candidate.startsWith('/') || /(^|\/)\.\.($|\/)/.test(candidate)) {
-      return false;
-    }
-
-    const normalized = path.posix.normalize(candidate);
-    return normalized === DEFAULT_EXTERNAL_MOUNT_ROOT || normalized.startsWith(`${DEFAULT_EXTERNAL_MOUNT_ROOT}/`);
   }
 
   private createJobConfigSnapshot(): JobConfigSnapshot {
@@ -412,23 +417,16 @@ export class JobManager {
       screenshots_failed: this.normalizeNonNegativeInteger(rawProgress.screenshots_failed),
       fine_search_frames_examined: this.normalizeNonNegativeInteger(rawProgress.fine_search_frames_examined),
     };
-    const rawExternalStorage: Partial<JobResult['external_storage']> = rawJob.external_storage && typeof rawJob.external_storage === 'object'
-      ? rawJob.external_storage
-      : {};
-    const externalStatus = rawExternalStorage.status;
-    const validExternalStatuses: ExternalStorageStatus[] = ['NOT_CONFIGURED', 'PENDING', 'COMPLETED', 'FAILED'];
-    const externalStorage = {
-      status: validExternalStatuses.includes(externalStatus as ExternalStorageStatus) ? externalStatus as ExternalStorageStatus : 'NOT_CONFIGURED' as const,
-    } as JobResult['external_storage'];
-    const relativePath = this.normalizeSafeRelativePath(rawExternalStorage.relative_path);
-    if (relativePath) externalStorage.relative_path = relativePath;
-    if (typeof rawExternalStorage.copied_at === 'string') externalStorage.copied_at = rawExternalStorage.copied_at;
-    if (typeof rawExternalStorage.warning === 'string') externalStorage.warning = rawExternalStorage.warning;
     const normalizedOutputDirectory = this.normalizeSafeRelativePath(rawJob.output_directory);
-    const { output_directory: _invalidOutputDirectory, ...jobWithoutOutputDirectory } = rawJob;
+    const rawJobWithLegacyFields = rawJob as JobResult & { external_storage?: unknown };
+    const {
+      output_directory: _invalidOutputDirectory,
+      external_storage: _legacyExternalStorage,
+      ...jobWithoutLegacyFields
+    } = rawJobWithLegacyFields;
 
     return {
-      ...jobWithoutOutputDirectory,
+      ...jobWithoutLegacyFields,
       ...(normalizedOutputDirectory ? { output_directory: normalizedOutputDirectory } : {}),
       schema_version: CURRENT_JOB_SCHEMA_VERSION,
       job_id: typeof rawJob.job_id === 'string' ? rawJob.job_id : '',
@@ -436,7 +434,6 @@ export class JobManager {
       status,
       phase: JOB_PHASES.includes(rawJob.phase as JobPhase) ? rawJob.phase as JobPhase : terminal ? 'FINALIZING' : 'ANALYSIS',
       progress,
-      external_storage: externalStorage,
       config_snapshot: this.normalizeJobConfigSnapshot(rawJob.config_snapshot),
       source: rawJob.source && typeof rawJob.source === 'object' ? rawJob.source : { type: 'unknown', url: '' },
       video: rawJob.video && typeof rawJob.video === 'object' ? rawJob.video : {},
@@ -539,10 +536,12 @@ export class JobManager {
   }
 
   public clearHistory(): number {
-    const files = fs.readdirSync(this.dataDir).filter(file => file.endsWith('.json'));
-    const jobIds = new Set(files
+    const jobFiles = fs.readdirSync(this.dataDir)
+      .filter(file => file.endsWith('.json'))
+      .filter(file => this.isAcceptedJobId(path.basename(file, '.json')));
+    const jobIds = new Set(jobFiles
       .map(file => path.basename(file, '.json'))
-      .filter(jobId => this.isAcceptedJobId(jobId)));
+    );
     const outputRoot = path.join(this.canonicalDataDir, 'output');
     const outputDirectories = fs.existsSync(outputRoot)
       ? fs.readdirSync(outputRoot, { withFileTypes: true })
@@ -572,9 +571,8 @@ export class JobManager {
     }
 
     this.activeJobs.clear();
-    for (const jobId of jobIds) this.externalOutputDirs.delete(jobId);
 
-    for (const file of files) {
+    for (const file of jobFiles) {
       try {
         fs.unlinkSync(path.join(this.dataDir, file));
       } catch (err) {
@@ -681,7 +679,7 @@ export class JobManager {
     const jobId = randomUUID();
     const configSnapshot = this.createJobConfigSnapshot();
     const job: JobResult = {
-      schema_version: '1.0',
+      schema_version: CURRENT_JOB_SCHEMA_VERSION,
       job_id: jobId,
       correlation_id: correlationId || jobId,
       status: 'QUEUED',
@@ -694,9 +692,6 @@ export class JobManager {
         screenshots_completed: 0,
         screenshots_failed: 0,
         fine_search_frames_examined: 0,
-      },
-      external_storage: {
-        status: this.config.external_output_dir ? 'PENDING' : 'NOT_CONFIGURED',
       },
       config_snapshot: configSnapshot,
       source: {
@@ -720,7 +715,6 @@ export class JobManager {
     };
 
     this.saveJob(job);
-    this.externalOutputDirs.set(jobId, this.config.external_output_dir);
     this.eventLogger.append({ job_id: jobId, type: 'JOB_CREATED', provider: 'app' });
     const runningPromise = this.startJob(jobId);
     this.runningPromises.set(jobId, runningPromise);

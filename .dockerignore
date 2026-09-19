@@ -3,8 +3,9 @@ dist
 .env*
 data
 temp
-external-output
 JSON Outputs
+output/*
+!output/README.md
 output/playwright
 .playwright-cli
 .superpowers

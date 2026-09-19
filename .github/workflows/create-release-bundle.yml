@@ -1,0 +1,52 @@
+name: Create release bundle
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Build release ZIP
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bundle_root='Video-Analyse-App'
+          archive="Video-Analyse-App-${GITHUB_REF_NAME}.zip"
+
+          mkdir -p "dist/${bundle_root}/output"
+          cp compose.yaml Start.cmd Stop.cmd Update.cmd "dist/${bundle_root}/"
+          cp output/README.md "dist/${bundle_root}/output/README.md"
+          touch "dist/${bundle_root}/output/.gitkeep"
+
+          (
+            cd dist
+            zip -r "../${archive}" "${bundle_root}"
+          )
+
+          unzip -l "${archive}"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            gh release create "${GITHUB_REF_NAME}" \
+              --title "Video-Analyse-App ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
+
+          gh release upload "${GITHUB_REF_NAME}" \
+            "Video-Analyse-App-${GITHUB_REF_NAME}.zip" \
+            --clobber

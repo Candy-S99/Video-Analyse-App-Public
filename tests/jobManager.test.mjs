@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { InvalidConfigError, JobManager } from '../src/backend/services/jobManager.ts';
+import { SecretStore } from '../src/backend/services/secretStore.ts';
 import { youtubeService } from '../src/backend/services/youtubeService.ts';
 import { geminiService } from '../src/backend/services/geminiService.ts';
 
@@ -30,7 +31,6 @@ function createJob(jobId, status = 'COMPLETED') {
       screenshots_failed: 0,
       fine_search_frames_examined: 3,
     },
-    external_storage: { status: 'NOT_CONFIGURED' },
     source: { type: 'youtube', url: 'https://www.youtube.com/watch?v=test' },
     video: { title: 'Testvideo' },
     analysis: {
@@ -135,7 +135,7 @@ test('Fixture bildet den vollständigen Screenshot-Jobvertrag ab', () => {
     screenshots_failed: 0,
     fine_search_frames_examined: 3,
   });
-  assert.deepEqual(job.external_storage, { status: 'NOT_CONFIGURED' });
+  assert.equal('external_storage' in job, false);
 
   assert.equal(job.screenshot_candidates.length, 1);
   const [candidate] = job.screenshot_candidates;
@@ -228,6 +228,32 @@ test('initialisiert Screenshot-Konfiguration mit den erwarteten Defaults', () =>
   assert.equal(config.automatic_cleanup_enabled, true);
 });
 
+test('lädt die normale Konfiguration nach einem Neustart aus dem ConfigStore', () => {
+  const dataDir = createTempDataDir();
+  const firstManager = new JobManager({ dataDir, processor: async () => {} });
+
+  firstManager.updateConfig({
+    model: 'gemini-9.9-preview',
+    segment_length_seconds: 45,
+    extract_transcript: false,
+    fine_search_window_seconds: 4,
+    fine_search_interval_seconds: 1,
+    max_screenshots_per_candidate: 2,
+    fine_search_fallback: 'skip',
+    automatic_cleanup_enabled: false,
+  });
+
+  const secondManager = new JobManager({ dataDir, processor: async () => {} });
+  assert.equal(secondManager.getConfig().model, 'gemini-9.9-preview');
+  assert.equal(secondManager.getConfig().segment_length_seconds, 45);
+  assert.equal(secondManager.getConfig().extract_transcript, false);
+  assert.equal(secondManager.getConfig().fine_search_window_seconds, 4);
+  assert.equal(secondManager.getConfig().fine_search_interval_seconds, 1);
+  assert.equal(secondManager.getConfig().max_screenshots_per_candidate, 2);
+  assert.equal(secondManager.getConfig().fine_search_fallback, 'skip');
+  assert.equal(secondManager.getConfig().automatic_cleanup_enabled, false);
+});
+
 test('bewahrt den Konfigurationssnapshot eines Jobs nach updateConfig', async () => {
   const dataDir = createTempDataDir();
   let observedJob;
@@ -267,7 +293,7 @@ test('bewahrt den Konfigurationssnapshot eines Jobs nach updateConfig', async ()
   assert.deepEqual(JSON.parse(fs.readFileSync(manager.getManifestPath(created.job_id), 'utf8')).config_snapshot, snapshot);
 });
 
-test('persistiert im Job-Snapshot keine internen oder externen Pfade', () => {
+test('persistiert im Job-Snapshot keine internen Laufzeitpfade', () => {
   const dataDir = createTempDataDir();
   const manager = new JobManager({
     dataDir,
@@ -277,17 +303,14 @@ test('persistiert im Job-Snapshot keine internen oder externen Pfade', () => {
       jobManager.saveJob(job);
     },
   });
-  manager.updateConfig({ external_output_dir: '/mnt/external-output/results' });
+  manager.updateConfig({ model: 'gemini-9.9-preview' });
 
   const job = manager.createJob('https://www.youtube.com/watch?v=safe-snapshot');
   const persisted = JSON.parse(fs.readFileSync(manager.getManifestPath(job.job_id), 'utf8'));
 
   assert.equal('data_dir' in job.config_snapshot, false);
-  assert.equal('external_output_dir' in job.config_snapshot, false);
   assert.equal('data_dir' in persisted.config_snapshot, false);
-  assert.equal('external_output_dir' in persisted.config_snapshot, false);
   assert.equal(JSON.stringify(persisted).includes(dataDir), false);
-  assert.equal(JSON.stringify(persisted).includes('/mnt/external-output'), false);
 });
 
 test('normalisiert einen abgeschlossenen Legacy-Job deterministisch und persistiert die Migration', () => {
@@ -331,7 +354,6 @@ test('normalisiert einen abgeschlossenen Legacy-Job deterministisch und persisti
     screenshots_failed: 0,
     fine_search_frames_examined: 0,
   });
-  assert.deepEqual(normalized.external_storage, { status: 'NOT_CONFIGURED' });
   assert.deepEqual(normalized.config_snapshot, {
     model: 'gemini-3.8-flash',
     segment_length_seconds: 60,
@@ -342,7 +364,7 @@ test('normalisiert einen abgeschlossenen Legacy-Job deterministisch und persisti
     fine_search_fallback: 'exact_timestamp',
     automatic_cleanup_enabled: true,
   });
-  assert.equal(normalized.schema_version, '2.0');
+  assert.equal(normalized.schema_version, '3.0');
   assert.deepEqual(persisted, normalized);
 });
 
@@ -354,32 +376,10 @@ test('initialisiert den Analysefortschritt eines neuen Jobs mit Nullwerten', () 
   assert.equal(job.progress.segments_total, 0);
 });
 
-test('akzeptiert nur absolute Pfade innerhalb des Container-Mounts', () => {
+test('lehnt den entfernten externen Output als unbekannte Konfiguration ab', () => {
   const manager = new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
-  const accepted = manager.updateConfig({ external_output_dir: '/mnt/external-output/screenshots' });
-
-  assert.equal(accepted.external_output_dir, '/mnt/external-output/screenshots');
-  for (const rejected of [
-    'relative/output',
-    '/mnt/external-output/../secrets',
-    '/var/lib/host-output',
-    'C:\\Users\\Alice\\output',
-    '\\\\server\\share\\output',
-    '/mnt/external-output/with\u0007bell',
-  ]) {
-    assert.throws(
-      () => manager.updateConfig({ external_output_dir: rejected }),
-      InvalidConfigError,
-      rejected,
-    );
-  }
-});
-
-test('signalisiert ungültige Konfiguration typisiert statt sie still zu verwerfen', () => {
-  const manager = new JobManager({ dataDir: createTempDataDir(), processor: async () => {} });
-
   assert.throws(
-    () => manager.updateConfig({ external_output_dir: '/var/lib/host-output' }),
+    () => manager.updateConfig({ external_output_dir: '/mnt/external-output' }),
     (error) => error instanceof InvalidConfigError
       && error.field === 'external_output_dir'
       && error.code === 'INVALID_CONFIGURATION',
@@ -456,7 +456,7 @@ test('normalisiert Legacy-Fortschritt und optionale Pfade defensiv', () => {
   assert.equal(normalized.analysis.segments_total, 0);
   assert.equal(normalized.analysis.segments_successful, 2);
   assert.equal(normalized.analysis.segments_failed, 0);
-  assert.deepEqual(normalized.external_storage, { status: 'NOT_CONFIGURED' });
+  assert.equal('external_storage' in normalized, false);
   assert.equal('output_directory' in normalized, false);
 });
 
@@ -657,6 +657,26 @@ test('clearHistory removes persisted jobs and prevents an active processor from 
   assert.equal(manager.getJob(active.job_id), null);
 });
 
+test('clearHistory preserves the app config and Gemini secret stores', () => {
+  const dataDir = createTempDataDir();
+  const configPath = path.join(dataDir, '.video-analysis-config.json');
+  const secretPath = path.join(dataDir, '.video-analysis-secrets.json');
+  const job = createJob('00000000-0000-4000-8000-000000000004');
+  const secretStore = new SecretStore({ filePath: secretPath });
+
+  fs.writeFileSync(configPath, JSON.stringify({ model: 'gemini-3.8-flash' }), 'utf8');
+  secretStore.setGeminiApiKey('test-key');
+
+  const manager = new JobManager({ dataDir, secretStore, processor: async () => {} });
+  manager.saveJob(job);
+  manager.clearHistory();
+
+  assert.equal(fs.existsSync(path.join(dataDir, `${job.job_id}.json`)), false);
+  assert.equal(fs.existsSync(configPath), true);
+  assert.equal(fs.existsSync(secretPath), true);
+  assert.equal(new SecretStore({ filePath: secretPath }).getGeminiApiKey(), 'test-key');
+});
+
 test('JobManager writes lifecycle events and preserves the global event log with history', async () => {
   const dataDir = createTempDataDir();
   const manager = new JobManager({
@@ -737,13 +757,12 @@ test('listet Jobs aus den kanonischen Output-Manifesten', () => {
   assert.deepEqual(manager.listPersistedJobs().map(job => job.job_id), [fixtureJobId]);
 });
 
-test('bindet den externen Output-Pfad an den Jobstart und nicht an spätere Konfigurationsänderungen', () => {
+test('verwendet die kanonische Output-Struktur für jeden neuen Job', () => {
   const dataDir = createTempDataDir();
   const manager = new JobManager({ dataDir, processor: async () => {} });
-  manager.updateConfig({ external_output_dir: '/mnt/external-output/first' });
-  const job = manager.createJob('https://www.youtube.com/watch?v=external-snapshot');
-  manager.updateConfig({ external_output_dir: '/mnt/external-output/second' });
-  assert.equal(manager.getExternalOutputDir(job.job_id), '/mnt/external-output/first');
+  const job = manager.createJob('https://www.youtube.com/watch?v=canonical-output');
+  assert.equal('external_storage' in job, false);
+  assert.equal(manager.getManifestPath(job.job_id).includes(`${path.sep}output${path.sep}`), true);
 });
 
 test('shutdown sperrt neue Jobs, bricht aktive Verarbeitung ab und wartet auf den Processor', async () => {

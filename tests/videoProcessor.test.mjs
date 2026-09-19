@@ -18,7 +18,7 @@ test('persistiert die realen Pipeline-Phasen und den Analysefortschritt', async 
   const jobId = randomUUID();
   const manager = new JobManager({ dataDir, processor: async () => {} });
   const job = {
-    schema_version: '2.0',
+    schema_version: '3.0',
     job_id: jobId,
     correlation_id: jobId,
     status: 'PROCESSING',
@@ -32,7 +32,6 @@ test('persistiert die realen Pipeline-Phasen und den Analysefortschritt', async 
       screenshots_failed: 0,
       fine_search_frames_examined: 0,
     },
-    external_storage: { status: 'NOT_CONFIGURED' },
     config_snapshot: {
       model: 'gemini-3.8-flash',
       segment_length_seconds: 60,
