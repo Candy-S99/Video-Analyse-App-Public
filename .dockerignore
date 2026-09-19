@@ -1,0 +1,19 @@
+node_modules
+dist
+.env*
+data
+temp
+external-output
+JSON Outputs
+output/playwright
+.playwright-cli
+.superpowers
+tests
+docs
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.db
+tmp_webapp_recon.png

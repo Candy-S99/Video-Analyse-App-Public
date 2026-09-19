@@ -1,0 +1,26 @@
+services:
+  video-analysis-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: on-failure:5
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      DATA_DIR: /data/jobs
+      TEMP_DIR: /tmp
+      SEGMENT_LENGTH: "${SEGMENT_LENGTH:-30}"
+      EXTRACT_TRANSCRIPT: "${EXTRACT_TRANSCRIPT:-true}"
+      APP_BIND_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:${APP_PORT:-3006}:3000"
+    volumes:
+      - ./data/jobs:/data/jobs
+      - ./external-output:/mnt/external-output
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

@@ -1,0 +1,22 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+.video-analysis-secrets.json
+data/jobs/*
+!data/jobs/.gitkeep
+temp/
+external-output/
+JSON Outputs/
+output/playwright/
+.playwright-cli/
+.superpowers/
+docs/superpowers/
+docs/research/
+tmp_webapp_recon.png
+test-ytdl.mjs
+yt-dlp
